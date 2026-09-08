@@ -37,7 +37,7 @@ async function candidates(env) {
         // models may answer. plain instruct first: reasoning models burn
         // the token cap on thinking.
         const ids = (((await r.json()) || {}).data || []).map(m => m.id)
-          .filter(i => !/guard|whisper|tts|embed|moderat|safety|compound|allam/i.test(i));
+          .filter(i => !/guard|whisper|tts|embed|moderat|safety|compound|allam|orpheus|canopylabs|audio/i.test(i));
         const prefs = ['llama-4-scout', 'llama-3.3-70b', 'llama-3.1-8b',
                        'instant', 'versatile', 'qwen', 'kimi', 'llama-4',
                        'gpt-oss-20b', 'llama'];
@@ -55,15 +55,28 @@ async function candidates(env) {
 }
 
 async function complete(env, messages, model) {
+  // every current groq chat model reasons; keep the thinking short so the
+  // answer fits the cap (some models cap max_tokens at 512)
+  const extra = /qwen/i.test(model) ? { reasoning_effort: 'none' }
+    : /gpt-oss/i.test(model) ? { reasoning_effort: 'low' } : {};
   return fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       authorization: 'Bearer ' + env.GROQ_API_KEY,
     },
-    // some groq models cap max_tokens at 512
-    body: JSON.stringify({ model, messages, max_tokens: 450, temperature: 0.3 }),
+    body: JSON.stringify({ model, messages, max_tokens: 450, temperature: 0.3, ...extra }),
   });
+}
+
+// a reasoning model may leak <think> blocks into content; strip them, and an
+// answer that is nothing but thought counts as no answer
+function cleanContent(raw) {
+  return String(raw || '')
+    .replace(/<think>[\s\S]*?<\/think>/g, '')
+    .replace(/^[\s\S]*?<\/think>/, '')
+    .replace(/<think>[\s\S]*$/, '')
+    .trim();
 }
 
 export default {
@@ -89,15 +102,29 @@ export default {
       .filter(m => m.content);
     if (!messages.length) return json({ error: 'no messages' }, 400);
 
-    let r = null;
-    for (const m of await candidates(env)) {   // a rotated or capped model
-      r = await complete(env, messages, m);    // falls through to the next
-      if (r.status !== 404 && r.status !== 400) break;
-      if (!env.MODEL) MODELS = null;
+    let lastText = '', lastStatus = 502;
+    for (const m of await candidates(env)) {
+      const r = await complete(env, messages, m);
+      lastText = await r.text(); lastStatus = r.status;
+      if (r.status === 404 || r.status === 400) {  // rotated away, capped, or
+        if (!env.MODEL) MODELS = null;             // rejected a param: next
+        continue;
+      }
+      if (!r.ok) break;              // 429/5xx: report honestly, no retry spray
+      try {
+        const d = JSON.parse(lastText);
+        const msg = ((d.choices || [])[0] || {}).message;
+        if (msg) {
+          msg.content = cleanContent(msg.content);
+          delete msg.reasoning;
+          if (!msg.content) continue;       // thought itself to death
+          return json(d, 200);
+        }
+      } catch {}
+      break;
     }
-    const text = await r.text();
-    return new Response(text, {
-      status: r.status,
+    return new Response(lastText || JSON.stringify({ error: 'no model answered' }), {
+      status: lastStatus,
       headers: { ...CORS, 'content-type': 'application/json' },
     });
   },
