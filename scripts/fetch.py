@@ -446,9 +446,15 @@ def run():
                     continue
                 g[k] = v
         g["launchpad"] = "pools.trade"
-    print("census: blockscout top tokens by market cap")
+    print("census: blockscout top tokens by holders")
     census = harvest_census()
-    filled = 0
+    # tokens the terminal already tracks, even if no listing shows them today;
+    # without this check every run re-fills the same top of the unknown queue
+    # and the backlog never drains
+    prev_map = dict(archive)
+    for t in old.get("launches", []):
+        prev_map[(t.get("addr") or "").lower()] = t
+    filled = refreshed = 0
     for c in census:
         t = fresh.get(c["addr"])
         if t:
@@ -456,15 +462,26 @@ def run():
                 t["holders"] = c["holders"]
             if not t.get("mcap"):
                 t["mcap"] = c["mcap"]
-        elif filled < 150:
-            rec = ds_fill(c["addr"])
-            time.sleep(0.35)
-            if rec:
-                rec["holders"] = c["holders"]
-                fresh[c["addr"]] = rec
+            continue
+        prev = prev_map.get(c["addr"])
+        want_new = prev is None and filled < 120
+        # a tracked-but-invisible token goes stale otherwise; refresh the top
+        # of them each run, after the never-seen ones
+        want_refresh = (prev is not None and refreshed < 60
+                        and now - (prev.get("last_seen") or 0) > 43200)
+        if not (want_new or want_refresh):
+            continue
+        rec = ds_fill(c["addr"])
+        time.sleep(0.35)
+        if rec:
+            rec["holders"] = c["holders"]
+            fresh[c["addr"]] = rec
+            if want_new:
                 filled += 1
-    print(f"  {len(census)} census rows, {filled} listing-invisible tokens "
-          f"filled via dexscreener")
+            else:
+                refreshed += 1
+    print(f"  {len(census)} census rows, {filled} new listing-invisible tokens "
+          f"filled, {refreshed} stale ones refreshed via dexscreener")
 
     if not fresh:
         raise SystemExit("nothing returned, leaving previous data in place")
