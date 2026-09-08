@@ -26,6 +26,9 @@ UA = {"User-Agent": "launchbrain/1.0 (+https://github.com/undefined-ui/launchbra
 
 SWEEP = list("abcdefghijklmnopqrstuvwxyz0123456789")
 GT_PAGE_CAP = 10           # the free tier answers 401 beyond page 10, everywhere
+GT_BUDGET = int(os.environ.get("LB_BUDGET_S", "780"))  # sweep time budget, seconds:
+                           # at ~28 calls/min the full sweep can outlast any CI
+                           # timeout, so stop on budget and write what we have
 MAX_TOKENS = 6000          # evict least recently seen beyond this
 SNAPSHOT_CAP = 48          # per token, roughly two days at 1h spacing
 DETAIL_TOP = 300           # keep trades and price series for this many by volume
@@ -120,6 +123,7 @@ def gt_token(pool, inc):
 
 
 def harvest_gecko():
+    t0 = time.time()
     seen, calls = {}, 0
 
     def absorb(doc):
@@ -139,13 +143,19 @@ def harvest_gecko():
                 seen[t["addr"]] = t
         return len(rows)
 
+    def spent():
+        return time.time() - t0 > GT_BUDGET
+
     for p in range(1, 4):
         absorb(gt_call(f"/new_pools?include=base_token,dex&page={p}"))
     absorb(gt_call("/trending_pools?include=base_token,dex"))
     for p in range(1, GT_PAGE_CAP + 1):
-        if not absorb(gt_call(f"/pools?include=base_token,dex&page={p}")):
+        # a short page is the last page; do not pay for the empty one after it
+        if absorb(gt_call(f"/pools?include=base_token,dex&page={p}")) < 20:
             break
-    # the real breadth: every venue's own pool list, paged until empty
+    # the real breadth: every venue's own pool list, paged until empty.
+    # Busy venues first — ranked by how often each appears in the pools already
+    # absorbed — so a spent budget costs the dust tail, not the movers.
     dexes = []
     for p in range(1, 4):
         doc = gt_call(f"/dexes?page={p}")
@@ -153,11 +163,22 @@ def harvest_gecko():
         if not rows:
             break
         dexes += [d.get("id") for d in rows if d.get("id")]
+    freq = {}
+    for t in seen.values():
+        freq[t.get("dex")] = freq.get(t.get("dex"), 0) + 1
+    dexes.sort(key=lambda d: -freq.get(d, 0))
+    swept = 0
     for dex in dexes:
+        if spent():
+            print(f"  time budget spent after {swept}/{len(dexes)} dexes; "
+                  f"writing what we have", file=sys.stderr)
+            break
         for p in range(1, GT_PAGE_CAP + 1):
-            if not absorb(gt_call(f"/dexes/{dex}/pools?include=base_token,dex&page={p}")):
+            if absorb(gt_call(f"/dexes/{dex}/pools?include=base_token,dex&page={p}")) < 20 or spent():
                 break
-    print(f"  {calls} gecko calls, {len(dexes)} dexes -> {len(seen)} unique tokens")
+        swept += 1
+    print(f"  {calls} gecko calls, {swept}/{len(dexes)} dexes in "
+          f"{int(time.time()-t0)}s -> {len(seen)} unique tokens")
     return seen
 
 
