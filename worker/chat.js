@@ -11,9 +11,9 @@
 //      (a free key from console.groq.com/keys)
 //   4. put the worker URL into AI_RELAY_URL in index.html
 //
-// The model is llama-3.1-8b-instant: on Groq's free tier it allows 14,400
-// requests a day, which is plenty for short risk reads. Override with a
-// MODEL variable if needed. Groq's own 429s pass through to the page, which
+// Groq rotates its model catalogue, so the worker asks /models what exists
+// and picks the best match from a preference list; set a MODEL variable to
+// pin one explicitly. Groq's own 429s pass through to the page, which
 // already shows an honest provider error.
 
 const CORS = {
@@ -21,6 +21,40 @@ const CORS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'content-type',
 };
+
+// cheap in-isolate cache; a stale entry heals via the 404 retry below
+let MODEL_CACHE = null;
+
+async function pickModel(env) {
+  if (env.MODEL) return env.MODEL;
+  if (MODEL_CACHE) return MODEL_CACHE;
+  try {
+    const r = await fetch('https://api.groq.com/openai/v1/models', {
+      headers: { authorization: 'Bearer ' + env.GROQ_API_KEY },
+    });
+    if (r.ok) {
+      const ids = (((await r.json()) || {}).data || []).map(m => m.id);
+      for (const p of ['gpt-oss-20b', 'llama-4-scout', 'llama-3.3-70b',
+                       'instant', 'llama', 'qwen']) {
+        const hit = ids.find(i => i.toLowerCase().includes(p));
+        if (hit) { MODEL_CACHE = hit; return hit; }
+      }
+      if (ids.length) { MODEL_CACHE = ids[0]; return MODEL_CACHE; }
+    }
+  } catch {}
+  return 'llama-3.3-70b-versatile';
+}
+
+async function complete(env, messages, model) {
+  return fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: 'Bearer ' + env.GROQ_API_KEY,
+    },
+    body: JSON.stringify({ model, messages, max_tokens: 300, temperature: 0.3 }),
+  });
+}
 
 export default {
   async fetch(req, env) {
@@ -43,19 +77,11 @@ export default {
       .filter(m => m.content);
     if (!messages.length) return json({ error: 'no messages' }, 400);
 
-    const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: 'Bearer ' + env.GROQ_API_KEY,
-      },
-      body: JSON.stringify({
-        model: env.MODEL || 'llama-3.1-8b-instant',
-        messages,
-        max_tokens: 300,
-        temperature: 0.3,
-      }),
-    });
+    let r = await complete(env, messages, await pickModel(env));
+    if (r.status === 404 && !env.MODEL) {   // model rotated away; re-discover
+      MODEL_CACHE = null;
+      r = await complete(env, messages, await pickModel(env));
+    }
     const text = await r.text();
     return new Response(text, {
       status: r.status,
