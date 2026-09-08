@@ -51,7 +51,7 @@ async function candidates(env) {
     } catch {}
     if (!MODELS) MODELS = ['llama-3.3-70b-versatile'];
   }
-  return MODELS.slice(0, 3);
+  return MODELS.slice(0, 5);
 }
 
 async function complete(env, messages, model) {
@@ -69,6 +69,8 @@ async function complete(env, messages, model) {
 export default {
   async fetch(req, env) {
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
+    if (req.method === 'GET')       // which models the relay would try, in order
+      return json({ candidates: env.GROQ_API_KEY ? await candidates(env) : [] }, 200);
     if (req.method !== 'POST')
       return json({ error: 'POST only' }, 405);
     if (!env.GROQ_API_KEY)
