@@ -20,6 +20,8 @@ import html, json, os, sys, time, urllib.error, urllib.parse, urllib.request
 
 BASE = "https://pools.trade/api/trpc"
 GT = "https://api.geckoterminal.com/api/v2/networks/robinhood"
+BS = "https://robinhoodchain.blockscout.com/api/v2"
+DS = "https://api.dexscreener.com"
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "..", "data")
 UA = {"User-Agent": "launchbrain/1.0 (+https://github.com/undefined-ui/launchbrain)"}
@@ -180,6 +182,84 @@ def harvest_gecko():
     print(f"  {calls} gecko calls, {swept}/{len(dexes)} dexes in "
           f"{int(time.time()-t0)}s -> {len(seen)} unique tokens")
     return seen
+
+
+# ---- Blockscout census + DexScreener fill ----
+# GeckoTerminal's free tier shows at most 200 pools per venue, so tokens whose
+# current volume ranks below that vanish from every listing even with real
+# holders and liquidity. The explorer keeps the full census, sorted by market
+# cap; DexScreener then prices the ones no listing covered. Blockscout sits
+# behind Cloudflare which sometimes blocks non-browser clients — every call
+# here degrades gracefully because the page can run the same census itself.
+
+def bs_call(path):
+    try:
+        req = urllib.request.Request(BS + path, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; launchbrain/1.0; "
+                          "+https://github.com/undefined-ui/launchbrain)",
+            "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=45) as r:
+            return json.load(r)
+    except Exception as e:
+        print(f"  ! blockscout {path}: {e}", file=sys.stderr)
+        return None
+
+
+def harvest_census(pages=8):
+    out, qs = [], "?type=ERC-20"
+    for _ in range(pages):
+        doc = bs_call("/tokens" + qs)
+        if not doc:
+            break
+        for i in doc.get("items") or []:
+            a = (i.get("address_hash") or i.get("address") or "").lower()
+            if a.startswith("0x"):
+                out.append({"addr": a, "sym": i.get("symbol"), "name": i.get("name"),
+                            "holders": int(num(i.get("holders_count") or i.get("holders"))),
+                            "mcap": num(i.get("circulating_market_cap"))})
+        np = doc.get("next_page_params")
+        if not np:
+            break
+        qs = "?type=ERC-20&" + urllib.parse.urlencode(np)
+        time.sleep(0.4)
+    return out
+
+
+def ds_fill(addr):
+    """One token's market numbers from DexScreener, deepest pair wins."""
+    try:
+        req = urllib.request.Request(f"{DS}/token-pairs/v1/robinhood/{addr}", headers=UA)
+        with urllib.request.urlopen(req, timeout=30) as r:
+            pairs = json.load(r) or []
+    except Exception:
+        return None
+    pairs = [p for p in pairs if isinstance(p, dict)
+             and ((p.get("baseToken") or {}).get("address") or "").lower() == addr]
+    if not pairs:
+        return None
+    best = max(pairs, key=lambda p: num((p.get("liquidity") or {}).get("usd")))
+    bt, info = best.get("baseToken") or {}, best.get("info") or {}
+    pc, vol = best.get("priceChange") or {}, best.get("volume") or {}
+    tx = (best.get("txns") or {}).get("h1") or {}
+    created = best.get("pairCreatedAt")
+    return {
+        "sym": html.unescape(bt.get("symbol") or ""),
+        "name": html.unescape(bt.get("name") or ""),
+        "addr": addr, "pool": (best.get("pairAddress") or "").lower(),
+        "dex": best.get("dexId"), "desc": "", "img": info.get("imageUrl"),
+        "x": next((s.get("url") for s in info.get("socials") or []
+                   if s.get("type") == "twitter"), None), "xok": False,
+        "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(created / 1000))
+                   if created else None,
+        "price": num(best.get("priceUsd")), "fdv": num(best.get("fdv")),
+        "mcap": num(best.get("marketCap")),
+        "liq": num((best.get("liquidity") or {}).get("usd")),
+        "ch1h": num(pc.get("h1")), "ch6h": num(pc.get("h6")), "ch24h": num(pc.get("h24")),
+        "vol1h": num(vol.get("h1")), "vol24": num(vol.get("h24")),
+        "buys1h": tx.get("buys") or 0, "sells1h": tx.get("sells") or 0,
+        "buyers1h": 0, "holders": 0, "grad": None, "spam": False, "verdict": None,
+        "flags": [], "badges": [], "series": [], "trades": [],
+    }
 
 
 # fields only pools.trade knows; they overlay the gecko record when both saw a token
@@ -355,6 +435,26 @@ def run():
                     continue
                 g[k] = v
         g["launchpad"] = "pools.trade"
+    print("census: blockscout top tokens by market cap")
+    census = harvest_census()
+    filled = 0
+    for c in census:
+        t = fresh.get(c["addr"])
+        if t:
+            if not t.get("holders"):
+                t["holders"] = c["holders"]
+            if not t.get("mcap"):
+                t["mcap"] = c["mcap"]
+        elif filled < 150:
+            rec = ds_fill(c["addr"])
+            time.sleep(0.35)
+            if rec:
+                rec["holders"] = c["holders"]
+                fresh[c["addr"]] = rec
+                filled += 1
+    print(f"  {len(census)} census rows, {filled} listing-invisible tokens "
+          f"filled via dexscreener")
+
     if not fresh:
         raise SystemExit("nothing returned, leaving previous data in place")
 
@@ -365,7 +465,8 @@ def run():
     if not auctions:
         auctions = [auction(r) for r in call("cca.listAuctions", {})]
 
-    meta = {"fetched_at": now, "chain_id": 4663, "source": "geckoterminal + pools.trade",
+    meta = {"fetched_at": now, "chain_id": 4663,
+            "source": "geckoterminal + pools.trade + blockscout + dexscreener",
             "tracked": len(rows), "seen_this_run": len(fresh), "auctions": len(auctions),
             "new_this_run": sum(1 for t in rows if t.get("first_seen") == now),
             "archived": len(arch_rows)}
