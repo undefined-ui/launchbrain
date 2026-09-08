@@ -22,29 +22,36 @@ const CORS = {
   'Access-Control-Allow-Headers': 'content-type',
 };
 
-// cheap in-isolate cache; a stale entry heals via the 404 retry below
-let MODEL_CACHE = null;
+// cheap in-isolate cache of ranked chat models; heals via retry below
+let MODELS = null;
 
-async function pickModel(env) {
-  if (env.MODEL) return env.MODEL;
-  if (MODEL_CACHE) return MODEL_CACHE;
-  try {
-    const r = await fetch('https://api.groq.com/openai/v1/models', {
-      headers: { authorization: 'Bearer ' + env.GROQ_API_KEY },
-    });
-    if (r.ok) {
-      const ids = (((await r.json()) || {}).data || []).map(m => m.id);
-      // plain instruct models first: reasoning models (gpt-oss) burn the
-      // token cap on thinking and can return an empty content field
-      for (const p of ['llama-4-scout', 'llama-3.3-70b', 'instant',
-                       'llama', 'qwen', 'gpt-oss-20b']) {
-        const hit = ids.find(i => i.toLowerCase().includes(p));
-        if (hit) { MODEL_CACHE = hit; return hit; }
+async function candidates(env) {
+  if (env.MODEL) return [env.MODEL];
+  if (!MODELS) {
+    try {
+      const r = await fetch('https://api.groq.com/openai/v1/models', {
+        headers: { authorization: 'Bearer ' + env.GROQ_API_KEY },
+      });
+      if (r.ok) {
+        // the catalogue mixes in classifiers and speech models; only chat
+        // models may answer. plain instruct first: reasoning models burn
+        // the token cap on thinking.
+        const ids = (((await r.json()) || {}).data || []).map(m => m.id)
+          .filter(i => !/guard|whisper|tts|embed|moderat|safety|compound|allam/i.test(i));
+        const prefs = ['llama-4-scout', 'llama-3.3-70b', 'llama-3.1-8b',
+                       'instant', 'versatile', 'qwen', 'kimi', 'llama-4',
+                       'gpt-oss-20b', 'llama'];
+        const ranked = [];
+        for (const p of prefs)
+          for (const i of ids)
+            if (i.toLowerCase().includes(p) && !ranked.includes(i)) ranked.push(i);
+        for (const i of ids) if (!ranked.includes(i)) ranked.push(i);
+        if (ranked.length) MODELS = ranked;
       }
-      if (ids.length) { MODEL_CACHE = ids[0]; return MODEL_CACHE; }
-    }
-  } catch {}
-  return 'llama-3.3-70b-versatile';
+    } catch {}
+    if (!MODELS) MODELS = ['llama-3.3-70b-versatile'];
+  }
+  return MODELS.slice(0, 3);
 }
 
 async function complete(env, messages, model) {
@@ -80,10 +87,11 @@ export default {
       .filter(m => m.content);
     if (!messages.length) return json({ error: 'no messages' }, 400);
 
-    let r = await complete(env, messages, await pickModel(env));
-    if (r.status === 404 && !env.MODEL) {   // model rotated away; re-discover
-      MODEL_CACHE = null;
-      r = await complete(env, messages, await pickModel(env));
+    let r = null;
+    for (const m of await candidates(env)) {   // a rotated or capped model
+      r = await complete(env, messages, m);    // falls through to the next
+      if (r.status !== 404 && r.status !== 400) break;
+      if (!env.MODEL) MODELS = null;
     }
     const text = await r.text();
     return new Response(text, {
