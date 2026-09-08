@@ -54,7 +54,8 @@ async function complete(env, messages, model) {
       'content-type': 'application/json',
       authorization: 'Bearer ' + env.GROQ_API_KEY,
     },
-    body: JSON.stringify({ model, messages, max_tokens: 600, temperature: 0.3 }),
+    // some groq models cap max_tokens at 512
+    body: JSON.stringify({ model, messages, max_tokens: 450, temperature: 0.3 }),
   });
 }
 
