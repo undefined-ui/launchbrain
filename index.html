@@ -843,7 +843,12 @@ function select(a){
 /* ---------- ask: a free model reads this token's numbers ----------
    Keyless provider by default; bring-your-own-key alternatives stored only in
    this browser. No key of the site's own ever exists. */
+// the relay is a tiny Cloudflare Worker (worker/chat.js) holding the site's
+// Groq key server-side, so chat works for every visitor with zero setup.
+// Empty URL = not deployed yet; the provider list adapts.
+const AI_RELAY_URL = '';
 const AI_PROVIDERS = {
+  ...(AI_RELAY_URL ? {relay: {url: AI_RELAY_URL, model:'', needsKey:false}} : {}),
   // bare: the anonymous tier rejects system role and sampling params
   pollinations: {url:'https://gen.pollinations.ai/v1/chat/completions',
     model:'openai-fast', needsKey:false, bare:true},
@@ -852,7 +857,9 @@ const AI_PROVIDERS = {
   groq: {url:'https://api.groq.com/openai/v1/chat/completions',
     model:'llama-3.3-70b-versatile', needsKey:true},
 };
-let AI = Object.assign({prov:'pollinations', key:'', model:''}, lsGet('lb.ai','{}'));
+let AI = Object.assign({prov: AI_RELAY_URL ? 'relay' : 'pollinations', key:'', model:''},
+  lsGet('lb.ai','{}'));
+if(!AI_PROVIDERS[AI.prov]) AI.prov = AI_RELAY_URL ? 'relay' : 'pollinations';
 const CHAT = {};             // addr -> [{role, content, err}]
 let aiBusy = false;
 const AI_SYS = `You are the assistant inside LaunchBrain, a terminal tracking token launches on Robinhood Chain (chain id 4663, an Arbitrum Orbit L2). You get one token's live data as JSON.
@@ -930,6 +937,9 @@ async function sendChat(addr){
     th.push({role:'assistant', err:1, content:
       e.message==='nokey'
         ? AI.prov+' needs an api key — click the provider name above to set one'
+        : AI.prov==='relay'
+        ? 'chat backend error ('+e.message+'). likely busy — try again in a minute, or '+
+          'click the provider name above to use your own free key instead.'
         : 'provider error ('+e.message+'). the keyless provider currently rejects most '+
           'anonymous requests. reliable free path: create a key at console.groq.com/keys '+
           'or openrouter.ai (both have free tiers), click the provider name above, pick '+
@@ -940,7 +950,7 @@ async function sendChat(addr){
   renderChat(addr);
 }
 function configAI(){
-  const prov = (prompt('ai provider: pollinations (keyless) / openrouter / groq', AI.prov)||'').trim().toLowerCase();
+  const prov = (prompt('ai provider: '+Object.keys(AI_PROVIDERS).join(' / '), AI.prov)||'').trim().toLowerCase();
   if(AI_PROVIDERS[prov]){
     AI.prov = prov;
     if(AI_PROVIDERS[prov].needsKey){

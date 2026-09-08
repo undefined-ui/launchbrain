@@ -58,13 +58,20 @@ the source named under the chart.
 
 **Ask.** Each token page has a chat: a model gets the token's JSON and answers
 in 1-3 sentences, in the user's language. Provider layer in `AI_PROVIDERS`:
-pollinations (keyless, default), openrouter and groq (bring-your-own-key,
-stored only in localStorage `lb.ai`). As of September 2026 the pollinations
-anonymous tier answers 401 to any non-cached prompt — effectively dead, kept as
-the default attempt in case it comes back; the working free path is a free
-groq or openrouter key. The system prompt forbids buy/sell recommendations and
-price predictions; the anonymous tier also rejects the `system` role and
-sampling params, so the bare provider folds everything into one user message.
+
+- `relay` — the zero-setup default for visitors: a Cloudflare Worker
+  (`worker/chat.js`) that holds the site's Groq key server-side. The key never
+  reaches the page, which keeps the no-key-in-the-bundle rule intact. Wire the
+  deployed worker URL into `AI_RELAY_URL` in `index.html`; while it is empty
+  the provider list falls back to pollinations.
+- pollinations (keyless) — as of September 2026 its anonymous tier answers 401
+  to any non-cached prompt, effectively dead; kept in case it comes back. It
+  also rejects the `system` role and sampling params, so the bare provider
+  folds everything into one user message.
+- openrouter and groq — bring-your-own-key, stored only in localStorage
+  `lb.ai`.
+
+The system prompt forbids buy/sell recommendations and price predictions.
 
 ## Verified facts about the data sources
 
