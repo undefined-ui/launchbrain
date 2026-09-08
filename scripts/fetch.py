@@ -205,22 +205,33 @@ def bs_call(path):
         return None
 
 
-def harvest_census(pages=8):
-    out, qs = [], "?type=ERC-20"
+CENSUS_SORT = "?type=ERC-20&sort=holders_count&order=desc"
+
+
+def harvest_census(pages=80, floor=150, budget=240):
+    """Top of the chain by holder count. The market-cap listing ends after a
+    few hundred rows because most tokens have no known fiat value; holders is
+    the sort that surfaces real tokens no pool listing shows."""
+    out, t0, qs = [], time.time(), CENSUS_SORT
     for _ in range(pages):
+        if time.time() - t0 > budget:
+            break
         doc = bs_call("/tokens" + qs)
         if not doc:
             break
+        low = False
         for i in doc.get("items") or []:
             a = (i.get("address_hash") or i.get("address") or "").lower()
+            h = int(num(i.get("holders_count") or i.get("holders")))
             if a.startswith("0x"):
                 out.append({"addr": a, "sym": i.get("symbol"), "name": i.get("name"),
-                            "holders": int(num(i.get("holders_count") or i.get("holders"))),
-                            "mcap": num(i.get("circulating_market_cap"))})
+                            "holders": h, "mcap": num(i.get("circulating_market_cap"))})
+            if h and h < floor:
+                low = True
         np = doc.get("next_page_params")
-        if not np:
+        if low or not np:
             break
-        qs = "?type=ERC-20&" + urllib.parse.urlencode(np)
+        qs = CENSUS_SORT + "&" + urllib.parse.urlencode(np)
         time.sleep(0.4)
     return out
 

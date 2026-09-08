@@ -298,6 +298,7 @@ document.addEventListener('visibilitychange', ()=>{ if(document.hidden && TOUCHE
 const FEEDS = {
   gecko: {label:'gecko', min:2200, gap:2200, at:0, fails:0, st:'idle'},
   ds:    {label:'dexscreener', min:1200, gap:1200, at:0, fails:0, st:'idle'},
+  scout: {label:'blockscout', min:1500, gap:1500, at:0, fails:0, st:'idle'},
 };
 let inflight = false, watchIdx = 0, pageIdx = 0;
 const PAGE_DEPTH = 10;             // gecko's free tier answers 401 past page 10
@@ -311,6 +312,7 @@ const JOBS = [
   {id:'top',   src:'gecko', every:30,  last:0, run:()=>{ pageIdx = pageIdx % PAGE_DEPTH + 1;
     return gtPools('pools?include=base_token,dex&page='+pageIdx); }},
   {id:'enrich',src:'ds',    every:8,   last:0, can:()=>ENRICH.length>0, run:()=>dsToken(ENRICH.shift())},
+  {id:'census',src:'scout', every:20,  last:0, can:()=>nowS()>censusRest, run:censusStep},
 ];
 async function api(url){
   const r = await fetch(url, {headers:{accept:'application/json'}});
@@ -352,6 +354,7 @@ function upsert(p, src){
     t = {addr:a, first_seen:ts, hist:[]};
     T.set(a, t); born = true;
     if(src === 'geckoterminal' && !ENRICHED.has(a)){ ENRICHED.add(a); ENRICH.push(a); }  // image + socials, once
+    if(CENSUS_H.has(a)){ t.holders = CENSUS_H.get(a); CENSUS_H.delete(a); }
   }
   // a token can trade in several pools, and the two feeds measure depth
   // differently. only refuse a patch from a genuinely shallow side pool, so a
@@ -435,6 +438,49 @@ function dsWatchNext(){
   return dsToken(w[watchIdx]);
 }
 
+/* ---------- census: the explorer knows every token ----------
+   Every pool listing on the free tiers is capped, so a token with real
+   holders but modest current volume can be invisible on all of them at once.
+   Blockscout's census (sorted by market cap) names them; the enrich queue
+   then prices them via DexScreener. Also the only holder count for tokens
+   the launchpad feed does not cover. One page per fire, a full pass roughly
+   every ten minutes. */
+const BS = 'https://robinhoodchain.blockscout.com/api/v2';
+const CENSUS_PAGES = 8;
+const CENSUS_SORT = '?type=ERC-20&sort=holders_count&order=desc';
+let censusPage = 0, censusQS = CENSUS_SORT, censusRest = 0;
+const CENSUS_H = new Map();          // holders for rows that do not exist yet
+async function censusStep(){
+  const d = await api(BS+'/tokens'+censusQS);
+  const ts = nowS();
+  for(const i of (d.items||[])){
+    const a = (i.address_hash||i.address||'').toLowerCase();
+    if(!a.startsWith('0x')) continue;
+    const holders = Math.round(num(i.holders_count ?? i.holders)||0);
+    const t = T.get(a);
+    if(t){
+      // blockscout is authoritative on-chain; only the launchpad's own richer
+      // feed keeps its number
+      if(holders && t.launchpad!=='pools.trade' && holders!==t.holders){
+        t.holders = holders; TOUCHED.add(a);
+        if(!DIRTY.has(a)) DIRTY.set(a, 0);
+      }
+      (t.srcs || (t.srcs = {})).blockscout = ts;
+    } else if(!ENRICHED.has(a)){
+      ENRICHED.add(a); ENRICH.push(a);
+      if(holders) CENSUS_H.set(a, holders);
+    }
+  }
+  const np = d.next_page_params;
+  censusPage++;
+  if(np && censusPage < CENSUS_PAGES){
+    censusQS = CENSUS_SORT+'&'+new URLSearchParams(np).toString();
+  } else {
+    censusPage = 0; censusQS = CENSUS_SORT;
+    censusRest = nowS() + 600;
+  }
+}
+
 /* ---------- charts: real hourly candles for the open token ----------
    GeckoTerminal serves OHLCV per pool, including uniswap v4 pool ids. The
    tracked pool id is tried first; when it is not a GT pool (pools.trade ids
@@ -483,7 +529,7 @@ function drawStatus(){
   const chip = f => `<span class="fchip ${f.st}">${f.label}${
     f.st==='slow' ? ' throttled' : f.st==='down' ? ' down' : ''}</span>`;
   const base = META ? 'snapshot '+agoU(META.fetched_at) : 'no snapshot';
-  $('#src').innerHTML = `${base} · ${chip(FEEDS.gecko)} · ${chip(FEEDS.ds)}`;
+  $('#src').innerHTML = `${base} · ${chip(FEEDS.gecko)} · ${chip(FEEDS.ds)} · ${chip(FEEDS.scout)}`;
 }
 function drawCounts(){
   $('#cnt').textContent = `${T.size} tracked · +${NEWSEEN.size} live · ${CCA.length} auctions`;

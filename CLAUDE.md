@@ -122,6 +122,24 @@ layer, never the source of the list.
 explorer `robinhoodchain.blockscout.com` (free API, useful for holder counts and
 contract verification on tokens the launchpad does not cover).
 
+**Blockscout** — `https://robinhoodchain.blockscout.com/api/v2`. The census:
+the only place every token on the chain is enumerable. All verified September
+2026:
+
+- `/tokens?type=ERC-20` pages by `next_page_params` (50 rows, urlencode them
+  back). Default market-cap order ends after ~650 rows because most tokens
+  have no known fiat value; `&sort=holders_count&order=desc` is the sort that
+  surfaces real tokens no pool listing shows.
+- `/tokens/{addr}` — one token, `holders_count` included. CORS is open, the
+  page can call all of this directly.
+- Cloudflare sits in front and sometimes 403s non-browser clients (curl got
+  blocked where the browser and urllib passed). Every census caller must
+  degrade gracefully.
+- Why this matters: GeckoTerminal's free tier lists at most 200 pools per
+  venue, so a token with hundreds of holders but modest current volume can be
+  invisible on every pool listing at once. The census names it, DexScreener
+  prices it.
+
 Reading raw chain data is not a shortcut. Price in USD, liquidity, 24h volume
 and FDV are not stored on chain; deriving them means decoding Uniswap v4 swaps,
 reconstructing reserves and aggregating across ~900k blocks a day. That is an
