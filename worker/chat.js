@@ -34,8 +34,10 @@ async function pickModel(env) {
     });
     if (r.ok) {
       const ids = (((await r.json()) || {}).data || []).map(m => m.id);
-      for (const p of ['gpt-oss-20b', 'llama-4-scout', 'llama-3.3-70b',
-                       'instant', 'llama', 'qwen']) {
+      // plain instruct models first: reasoning models (gpt-oss) burn the
+      // token cap on thinking and can return an empty content field
+      for (const p of ['llama-4-scout', 'llama-3.3-70b', 'instant',
+                       'llama', 'qwen', 'gpt-oss-20b']) {
         const hit = ids.find(i => i.toLowerCase().includes(p));
         if (hit) { MODEL_CACHE = hit; return hit; }
       }
@@ -52,7 +54,7 @@ async function complete(env, messages, model) {
       'content-type': 'application/json',
       authorization: 'Bearer ' + env.GROQ_API_KEY,
     },
-    body: JSON.stringify({ model, messages, max_tokens: 300, temperature: 0.3 }),
+    body: JSON.stringify({ model, messages, max_tokens: 600, temperature: 0.3 }),
   });
 }
 
