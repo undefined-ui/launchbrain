@@ -202,9 +202,14 @@ tells anyone to buy.
 **Honest limits in the UI.** Snapshot age is always visible. When a feed fails,
 the page says so instead of showing stale numbers as if they were live.
 
-**Style.** Dense monospace terminal, dark. Colours already defined as CSS
-variables at the top of `index.html`. No emoji, no gradients, no rounded card
-soup. British-ish plain English in the interface, lowercase labels.
+**Style.** Dense monospace terminal, dark — but alive, not austere (the owner
+asked for this after "looks a bit primitive" feedback, September 2026):
+electric-green accent with cyan as secondary, soft glows, micro-transitions,
+token logos in the table, rounded corners in moderation. JetBrains Mono for
+data, Space Grotesk for the brand — Google Fonts with system fallbacks, the
+one allowed runtime dependency. Still: no emoji, honest numbers, lowercase
+labels, British-ish plain English. Colours are CSS variables at the top of
+`index.html`.
 
 **Keyboard shortcuts must never fire while the user is typing.** This broke once
 already: pressing `e` in the chat downloaded a file.
