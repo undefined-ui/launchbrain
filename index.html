@@ -146,6 +146,15 @@ h4{font-size:10.5px;color:var(--faint);letter-spacing:.09em;margin:14px 0 6px;fo
 .flags{display:flex;flex-wrap:wrap;gap:4px}
 .tr{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #141920;
   font-size:12px}
+.pt{margin:2px 0 12px}
+.pt .ph,.pt .pr{display:grid;gap:10px;align-items:baseline;padding:3px 0;font-size:12px}
+.pt .ph{color:var(--faint);font-size:9.5px;letter-spacing:.05em;border-bottom:1px solid var(--line)}
+.pt .pr{border-bottom:1px solid #10151C}
+.pt .ph,.pt .pr{gap:6px}
+.pt.p5 .ph,.pt.p5 .pr{grid-template-columns:minmax(40px,1fr) 60px 76px 62px}
+.pt.p3 .ph,.pt.p3 .pr{grid-template-columns:minmax(48px,1fr) 1fr 76px}
+.pt.pf .ph,.pt.pf .pr{grid-template-columns:30px minmax(34px,1fr) 58px 72px 44px}
+.pt .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .acts{display:flex;gap:6px;margin:12px 0}
 .acts button{border:1px solid var(--line);border-radius:9px;padding:6px 12px;color:var(--dim);
   transition:border-color .15s,color .15s,box-shadow .15s}
@@ -1674,10 +1683,12 @@ function selectTrader(w){
     return {a, t, st, avgIn, avgOut, net, val: net>0 ? net*(t.price||0) : 0};
   }).sort((x,y)=>y.st.pnl-x.st.pnl);
   const rows = pos.map(p=>`
-    <div class="tr"><span><a href="#" onclick="select('${p.a}');return false">${esc(p.t.sym||p.a.slice(0,8))}</a></span>
-      <span class="${p.st.pnl>=0?'up':'down'}">${p.st.pnl>=0?'+':''}${dUsd(Math.abs(p.st.pnl))}</span>
-      <span class="dim">${p.avgIn?'in '+dPx(p.avgIn):''}${p.avgOut?' out '+dPx(p.avgOut):''}</span>
-      <span class="dim">${p.val>1?dUsd(p.val)+' held':p.net<0?'flipped':'closed'}</span></div>`).join('');
+    <div class="pr">
+      <span><a href="#" onclick="select('${p.a}');return false">${esc(p.t.sym||p.a.slice(0,8))}</a></span>
+      <span class="num ${p.st.pnl>=0?'up':'down'}">${p.st.pnl>=0?'+':''}${dUsd(Math.abs(p.st.pnl))}</span>
+      <span class="num">${p.avgIn?dPx(p.avgIn):'—'}</span>
+      <span class="num dim">${p.val>1?dUsd(p.val):p.st.sa>=p.st.ba?'closed':'—'}</span>
+    </div>`).join('');
   $('#detail').innerHTML = `
     <div class="dh"><h2>${shortW(w)}</h2><span class="dim">trader</span></div>
     <div class="dsub"><a href="https://robinhoodchain.blockscout.com/address/${w}" target="_blank" rel="noopener">explorer</a>
@@ -1689,9 +1700,11 @@ function selectTrader(w){
       <div><span>tokens traded</span><b>${tr.toks.size}</b></div>
     </div>
     <h4>POSITIONS — recorded ${TRW} window</h4>
-    ${rows || '<div class="dim">nothing recorded</div>'}
-    <div class="dsub" style="margin-top:6px">pnl = sells − buys + remainder at current price.
-      avg entry and exit are volume-weighted over the recorded window only.</div>
+    <div class="pt p5">
+      <div class="ph"><span>token</span><span class="num">pnl</span><span class="num">avg entry</span>
+        <span class="num">held</span></div>
+      ${rows || '<div class="dim">nothing recorded</div>'}
+    </div>
     <h4>HOLDING NOW <span class="dim" id="p_hold_src">— loading from blockscout…</span></h4>
     <div id="p_hold"><div class="dim">…</div></div>
     <h4>RECENT FILLS <span class="dim" id="p_fill_src">— loading from geckoterminal…</span></h4>
@@ -1705,18 +1718,25 @@ async function loadHoldings(w){
       {headers:{accept:'application/json'}}).then(r=>r.ok?r.json():null);
     if(selT !== w || !$('#p_hold')) return;
     const items = (d && d.items) || [];
-    const rows = items.map(i=>{
+    const all = items.map(i=>{
       const tk = i.token||{}, a=(tk.address_hash||tk.address||'').toLowerCase();
       const dec = +(tk.decimals||18), amt = num(i.value)/Math.pow(10,dec);
       const t = T.get(a);
       return {a, sym: tk.symbol||a.slice(0,8), amt, usd: t ? amt*(t.price||0) : null, known: !!t};
-    }).sort((x,y)=>(y.usd||0)-(x.usd||0)).slice(0,12);
+    }).sort((x,y)=>(y.usd||0)-(x.usd||0));
+    // airdropped dust with no known market drowns the real positions
+    const rows = all.filter(r=>(r.usd!=null&&r.usd>=1)||(r.known&&r.usd>=.01)).slice(0,10);
+    const dust = all.length - rows.length;
     $('#p_hold_src').textContent = '— blockscout, live';
-    $('#p_hold').innerHTML = rows.length ? rows.map(r=>`
-      <div class="tr"><span>${r.known?`<a href="#" onclick="select('${r.a}');return false">${esc(r.sym)}</a>`:esc(r.sym)}</span>
-        <span class="dim">${r.amt>=1?r.amt.toLocaleString('en',{maximumFractionDigits:0}):r.amt.toPrecision(3)}</span>
-        <span>${r.usd!=null?dUsd(r.usd):'<span class="dim">no price</span>'}</span></div>`).join('')
-      : '<div class="dim">no token balances</div>';
+    $('#p_hold').innerHTML = `<div class="pt p3">
+      <div class="ph"><span>token</span><span class="num">amount</span><span class="num">value</span></div>
+      ${rows.length ? rows.map(r=>`
+        <div class="pr"><span>${r.known?`<a href="#" onclick="select('${r.a}');return false">${esc(r.sym)}</a>`:esc(r.sym)}</span>
+          <span class="num dim">${r.amt>=1?r.amt.toLocaleString('en',{maximumFractionDigits:0}):r.amt.toPrecision(3)}</span>
+          <span class="num">${r.usd!=null?dUsd(r.usd):'—'}</span></div>`).join('')
+        : '<div class="dim">no priced balances</div>'}
+      ${dust>0?`<div class="dim" style="padding:4px 0;font-size:11px">+ ${dust} unpriced dust tokens</div>`:''}
+    </div>`;
   }catch(e){
     if(selT===w && $('#p_hold')){ $('#p_hold_src').textContent='— blockscout unreachable';
       $('#p_hold').innerHTML='<div class="dim">could not load</div>'; }
@@ -1740,12 +1760,16 @@ async function loadFills(w, pos){
     if(selT !== w || !$('#p_fills')) return;
     fills.sort((x,y)=>(y.ts||'').localeCompare(x.ts||''));
     $('#p_fill_src').textContent = '— geckoterminal, the pools this wallet trades most';
-    $('#p_fills').innerHTML = fills.length ? fills.slice(0,12).map(f=>`
-      <div class="tr"><span class="${f.buy?'up':'down'}">${f.buy?'buy':'sell'}</span>
-        <span>${esc(f.sym||'')}</span><span>${dUsd(f.usd)}</span>
-        <span class="dim">${f.px?dPx(f.px):''}</span>
-        <span class="dim">${f.ts?ago(f.ts):''}</span></div>`).join('')
-      : '<div class="dim">nothing in the visible trade window</div>';
+    $('#p_fills').innerHTML = `<div class="pt pf">
+      <div class="ph"><span>side</span><span>token</span><span class="num">size</span>
+        <span class="num">price</span><span class="num">when</span></div>
+      ${fills.length ? fills.slice(0,12).map(f=>`
+        <div class="pr"><span class="${f.buy?'up':'down'}">${f.buy?'buy':'sell'}</span>
+          <span>${esc(f.sym||'')}</span><span class="num">${dUsd(f.usd)}</span>
+          <span class="num dim">${f.px?dPx(f.px):'—'}</span>
+          <span class="num dim">${f.ts?ago(f.ts):'—'}</span></div>`).join('')
+        : '<div class="dim">nothing in the visible trade window</div>'}
+    </div>`;
   }catch(e){
     if(selT===w && $('#p_fills')){ $('#p_fill_src').textContent='— feed busy, try reopening';
       $('#p_fills').innerHTML='<div class="dim">could not load</div>'; }
