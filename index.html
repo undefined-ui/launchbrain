@@ -330,6 +330,8 @@ const PAGE_DEPTH = 10;             // gecko's free tier answers 401 past page 10
 const GT = 'https://api.geckoterminal.com/api/v2/networks/robinhood/';
 const JOBS = [
   {id:'new',   src:'gecko', every:15,  last:0, run:()=>gtPools('new_pools?include=base_token,dex')},
+  // right after new-pool detection: the trader map wants its data fast
+  {id:'trades',src:'gecko', every:2,   last:0, can:()=>!!tradeNeed(), run:tradesStep},
   {id:'sel',   src:'ds',    every:12,  last:0, can:()=>!!(sel && T.has(sel)), run:()=>dsToken(sel)},
   {id:'chart', src:'gecko', every:4,   last:0, can:()=>!!chartNeed(), run:chartStep},
   {id:'watch', src:'ds',    every:18,  last:0, can:()=>WATCH.size>0, run:dsWatchNext},
@@ -338,7 +340,6 @@ const JOBS = [
     return gtPools('pools?include=base_token,dex&page='+pageIdx); }},
   {id:'enrich',src:'ds',    every:8,   last:0, can:()=>ENRICH.length>0, run:()=>dsToken(ENRICH.shift())},
   {id:'census',src:'scout', every:20,  last:0, can:()=>nowS()>censusRest, run:censusStep},
-  {id:'trades',src:'gecko', every:4,   last:0, can:()=>!!tradeNeed(), run:tradesStep},
 ];
 async function api(url){
   const r = await fetch(url, {headers:{accept:'application/json'}});
@@ -779,9 +780,10 @@ const GRAPH = {nodes:[], edges:[], raf:0, frame:0, hover:null,
    sells minus buys in usd, plus the net token position marked at the
    current price. It knows nothing about older cost basis and says so. */
 const TRADERS = new Map();
+const TR_TOKENS = 120;
 function tradeNeed(){
   if(tab!=='graph' || GRAPH.mode!=='traders' || document.hidden) return null;
-  for(const t of topTokens(70)){
+  for(const t of topTokens(TR_TOKENS)){
     if('clearing' in t) continue;
     const pool = t.gt_pool || t.pool;
     if(!pool || !/^0x[0-9a-f]{40,66}$/.test(pool)) continue;
@@ -817,7 +819,7 @@ async function tradesStep(){
 }
 function rebuildTraders(){
   TRADERS.clear();
-  for(const t of topTokens(70)){
+  for(const t of topTokens(TR_TOKENS)){
     if(!t._traders) continue;
     for(const [w,p] of t._traders){
       let tr = TRADERS.get(w);
@@ -875,14 +877,14 @@ function buildGraph(){
     for(const n of GRAPH.nodes){ n.x*=sx; n.y*=sy; }
   }
   GRAPH.W=W; GRAPH.H=H;
-  const toks=topTokens(GRAPH.mode==='traders'?70:100);
+  const toks=topTokens(GRAPH.mode==='traders'?TR_TOKENS:100);
   const old=new Map(GRAPH.nodes.map(n=>[n.addr,n]));
   GRAPH.nodes=toks.map(t=>old.get(t.addr)||{
     addr:t.addr,
     x:W/2+(Math.random()-.5)*W*.7, y:H/2+(Math.random()-.5)*H*.7, vx:0, vy:0});
   if(GRAPH.mode==='traders'){
     // top wallets of the day, sized by traded volume, coloured by window pnl
-    const top=[...TRADERS.values()].sort((a,b)=>b.vol-a.vol).slice(0,40);
+    const top=[...TRADERS.values()].sort((a,b)=>b.vol-a.vol).slice(0,100);
     for(const tr of top){
       const a='tr:'+tr.w, o=old.get(a);
       GRAPH.nodes.push(o||{addr:a, trader:1, w:tr.w,
@@ -930,10 +932,10 @@ function buildGraph(){
       if(!n.trader) continue;
       const tr=TRADERS.get(n.w); if(!tr) continue;
       for(const [ta,st] of tr.toks){
-        if(idx.has(ta) && st.usd>=50) flows.push([n.addr,ta,st]);
+        if(idx.has(ta) && st.usd>=20) flows.push([n.addr,ta,st]);
       }
     }
-    flows.sort((x,y)=>y[2].usd-x[2].usd).slice(0,260)
+    flows.sort((x,y)=>y[2].usd-x[2].usd).slice(0,500)
       .forEach(([a,b,st])=>{ const key=a+b;
         edges.push({a:idx.get(a),b:idx.get(b),k:'flow',w:st.usd,dir:st.b>=st.s?1:-1}); });
   } else {
@@ -1076,6 +1078,9 @@ function gDraw(W,H,R,toks){
       continue;
     }
     const t=toks[i]||{};
+    // in traders mode a token whose trades are not read yet stays faint
+    const unread = GRAPH.mode==='traders' && !t._traders;
+    if(unread && !dimmed) ctx.globalAlpha=.28;
     const up=(t.ch24h||0)>=0, col=up?CU:CD;
     const hot=n.addr===GRAPH.hover||sel===n.addr||WATCH.has(n.addr);
     ctx.save();
@@ -1479,7 +1484,7 @@ function gLegend(){
 }
 function gProgress(){
   if(GRAPH.mode!=='traders'){ $('#gprog').textContent=''; return; }
-  const toks = topTokens(70).filter(t=>!('clearing' in t));
+  const toks = topTokens(TR_TOKENS).filter(t=>!('clearing' in t));
   const done = toks.filter(t=>t._tr_at).length;
   $('#gprog').textContent = done<toks.length
     ? `reading trades ${done}/${toks.length} pools · ${TRADERS.size} wallets`
