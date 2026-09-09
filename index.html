@@ -125,6 +125,10 @@ textarea{width:100%;min-height:92px;background:var(--panel2);border:1px solid va
 #gcanvas{display:block;width:100%;height:100%;cursor:default}
 #glegend{position:absolute;left:10px;bottom:8px;color:var(--faint);font-size:10.5px;
   pointer-events:none;max-width:90%}
+#gmode{position:absolute;left:10px;top:8px;display:flex;gap:6px;align-items:center;
+  font-size:11px;z-index:4}
+#gmode .chip{background:rgba(17,21,27,.85)}
+#gprog{font-size:10.5px}
 .gl-c{color:var(--acc)}.gl-t{color:var(--warn)}.gl-r{color:var(--dim)}
 #gtip{position:absolute;background:var(--panel);border:1px solid var(--line);border-radius:3px;
   padding:7px 9px;font-size:11.5px;pointer-events:none;z-index:5;max-width:230px}
@@ -178,11 +182,12 @@ kbd{border:1px solid var(--line);border-radius:3px;padding:0 4px;color:var(--dim
   <div id="list"><div class="empty">loading data…</div></div>
   <div id="graphwrap" hidden>
     <canvas id="gcanvas"></canvas>
-    <div id="glegend">size: volume &amp; depth · colour: 24h move · hollow nodes: venues ·
-      lines: <span class="gl-c">same creator</span> ·
-      <span class="gl-t">shared recent traders</span> ·
-      <span class="gl-r">correlated price</span> · faint: listed on that venue ·
-      drag bubbles · drag empty space to pan · wheel to zoom</div>
+    <div id="gmode">
+      <button data-gm="traders" class="chip on">traders</button>
+      <button data-gm="venues" class="chip">venues</button>
+      <span id="gprog" class="dim"></span>
+    </div>
+    <div id="glegend"></div>
     <div id="gtip" hidden></div>
   </div>
   <div id="detail"><div class="empty">select a token</div></div>
@@ -333,6 +338,7 @@ const JOBS = [
     return gtPools('pools?include=base_token,dex&page='+pageIdx); }},
   {id:'enrich',src:'ds',    every:8,   last:0, can:()=>ENRICH.length>0, run:()=>dsToken(ENRICH.shift())},
   {id:'census',src:'scout', every:20,  last:0, can:()=>nowS()>censusRest, run:censusStep},
+  {id:'trades',src:'gecko', every:4,   last:0, can:()=>!!tradeNeed(), run:tradesStep},
 ];
 async function api(url){
   const r = await fetch(url, {headers:{accept:'application/json'}});
@@ -513,7 +519,8 @@ function chartNeed(){
        && !(t._chart_err && nowS() - t._chart_err < 180)) return t;
   }
   // the graph warms candles for its nodes so correlation links can form
-  if(tab === 'graph' && !document.hidden){
+  // (in traders mode the gecko budget goes to the trades feed instead)
+  if(tab === 'graph' && GRAPH.mode !== 'traders' && !document.hidden){
     for(const n of GRAPH.nodes){
       const t = T.get(n.addr);
       if(t && !('clearing' in t)
@@ -766,7 +773,61 @@ function find(a){ return T.get(a) || CCA.find(x=>x.addr===a); }
    tokens whose price series move together. Hand-rolled force layout on
    a canvas — no library, per the one-file rule. */
 const GRAPH = {nodes:[], edges:[], raf:0, frame:0, hover:null,
-  view:{x:0,y:0,k:1}, drag:null, pan:null};
+  view:{x:0,y:0,k:1}, drag:null, pan:null, mode:'traders'};
+/* trader layer: per-pool trades from geckoterminal, aggregated per wallet.
+   "pnl" is an honest estimate over the visible 24h trade window only:
+   sells minus buys in usd, plus the net token position marked at the
+   current price. It knows nothing about older cost basis and says so. */
+const TRADERS = new Map();
+function tradeNeed(){
+  if(tab!=='graph' || GRAPH.mode!=='traders' || document.hidden) return null;
+  for(const t of topTokens(70)){
+    if('clearing' in t) continue;
+    const pool = t.gt_pool || t.pool;
+    if(!pool || !/^0x[0-9a-f]{40,66}$/.test(pool)) continue;
+    if(t._tr_at && nowS()-t._tr_at < 600) continue;
+    if(t._tr_err && nowS()-t._tr_err < 900) continue;
+    return t;
+  }
+  return null;
+}
+async function tradesStep(){
+  const t = tradeNeed(); if(!t) return;
+  try{
+    const d = await api(GT+'pools/'+(t.gt_pool||t.pool)+'/trades');
+    const per = new Map();
+    for(const row of (d.data||[])){
+      const a = row.attributes||{};
+      const w = (a.tx_from_address||'').toLowerCase();
+      if(!w) continue;
+      const usd = num(a.volume_in_usd)||0;
+      const buy = a.kind === 'buy';
+      const amt = num(buy ? a.to_token_amount : a.from_token_amount)||0;
+      let p = per.get(w);
+      if(!p){ p = {b:0,s:0,ba:0,sa:0,n:0}; per.set(w,p); }
+      if(buy){ p.b += usd; p.ba += amt; } else { p.s += usd; p.sa += amt; }
+      p.n++;
+    }
+    t._traders = per; t._tr_at = nowS();
+    rebuildTraders();
+  }catch(e){
+    if(e.throttle) throw e;
+    t._tr_err = nowS();
+  }
+}
+function rebuildTraders(){
+  TRADERS.clear();
+  for(const t of topTokens(70)){
+    if(!t._traders) continue;
+    for(const [w,p] of t._traders){
+      let tr = TRADERS.get(w);
+      if(!tr){ tr = {w, vol:0, pnl:0, buys:0, sells:0, toks:new Map()}; TRADERS.set(w,tr); }
+      const pnl = p.s - p.b + (p.ba - p.sa) * (t.price||0);
+      tr.vol += p.b + p.s; tr.buys += p.b; tr.sells += p.s; tr.pnl += pnl;
+      tr.toks.set(t.addr, {usd:p.b+p.s, b:p.b, s:p.s, pnl});
+    }
+  }
+}
 const gDPR = window.devicePixelRatio || 1;
 function gWorld(mx,my){ const v=GRAPH.view; return [(mx-v.x)/v.k, (my-v.y)/v.k]; }
 function gVenue(t){
@@ -814,21 +875,31 @@ function buildGraph(){
     for(const n of GRAPH.nodes){ n.x*=sx; n.y*=sy; }
   }
   GRAPH.W=W; GRAPH.H=H;
-  const toks=topTokens(100);
+  const toks=topTokens(GRAPH.mode==='traders'?70:100);
   const old=new Map(GRAPH.nodes.map(n=>[n.addr,n]));
   GRAPH.nodes=toks.map(t=>old.get(t.addr)||{
     addr:t.addr,
     x:W/2+(Math.random()-.5)*W*.7, y:H/2+(Math.random()-.5)*H*.7, vx:0, vy:0});
-  // venue hubs: every token hangs off its exchange, so the map is connected
-  // even before creator, trader and correlation links show up
-  const venues={};
-  for(const t of toks){ const v=gVenue(t); venues[v]=(venues[v]||0)+1; }
-  for(const v in venues){
-    const a='hub:'+v;
-    const o=old.get(a);
-    GRAPH.nodes.push(o||{addr:a, hub:1, label:v, n:venues[v],
-      x:W/2+(Math.random()-.5)*W*.5, y:H/2+(Math.random()-.5)*H*.5, vx:0, vy:0});
-    if(o){ o.label=v; o.n=venues[v]; }
+  if(GRAPH.mode==='traders'){
+    // top wallets of the day, sized by traded volume, coloured by window pnl
+    const top=[...TRADERS.values()].sort((a,b)=>b.vol-a.vol).slice(0,40);
+    for(const tr of top){
+      const a='tr:'+tr.w, o=old.get(a);
+      GRAPH.nodes.push(o||{addr:a, trader:1, w:tr.w,
+        x:W/2+(Math.random()-.5)*W*.5, y:H/2+(Math.random()-.5)*H*.5, vx:0, vy:0});
+    }
+  } else {
+    // venue hubs: every token hangs off its exchange, so the map is connected
+    // even before creator, trader and correlation links show up
+    const venues={};
+    for(const t of toks){ const v=gVenue(t); venues[v]=(venues[v]||0)+1; }
+    for(const v in venues){
+      const a='hub:'+v;
+      const o=old.get(a);
+      GRAPH.nodes.push(o||{addr:a, hub:1, label:v, n:venues[v],
+        x:W/2+(Math.random()-.5)*W*.5, y:H/2+(Math.random()-.5)*H*.5, vx:0, vy:0});
+      if(o){ o.label=v; o.n=venues[v]; }
+    }
   }
   const idx=new Map(GRAPH.nodes.map((n,i)=>[n.addr,i]));
   const edges=[], pair=new Set();
@@ -853,7 +924,21 @@ function buildGraph(){
     if(r>=.75) corr.push([rs[i].a,rs[j].a,r]);
   }
   corr.sort((x,y)=>y[2]-x[2]).slice(0,120).forEach(([a,b,r])=>push(a,b,'corr',r));
-  for(const t of toks) push(t.addr,'hub:'+gVenue(t),'venue');
+  if(GRAPH.mode==='traders'){
+    const flows=[];
+    for(const n of GRAPH.nodes){
+      if(!n.trader) continue;
+      const tr=TRADERS.get(n.w); if(!tr) continue;
+      for(const [ta,st] of tr.toks){
+        if(idx.has(ta) && st.usd>=50) flows.push([n.addr,ta,st]);
+      }
+    }
+    flows.sort((x,y)=>y[2].usd-x[2].usd).slice(0,260)
+      .forEach(([a,b,st])=>{ const key=a+b;
+        edges.push({a:idx.get(a),b:idx.get(b),k:'flow',w:st.usd,dir:st.b>=st.s?1:-1}); });
+  } else {
+    for(const t of toks) push(t.addr,'hub:'+gVenue(t),'venue');
+  }
   GRAPH.edges=edges;
   if($('#t4')) $('#t4').textContent=GRAPH.nodes.length;
 }
@@ -861,13 +946,17 @@ function gRadius(t,vmax){
   return 6+22*Math.sqrt(Math.max(t.vol24||0,t.liq||0)/(vmax||1));
 }
 function gRadii(){
-  const toks=GRAPH.nodes.map(n=>n.hub?null:(T.get(n.addr)||{}));
+  const toks=GRAPH.nodes.map(n=>(n.hub||n.trader)?null:(T.get(n.addr)||{}));
   const vmax=Math.max(1,...toks.map(t=>t?Math.max(t.vol24||0,t.liq||0):0));
-  return {toks, R: GRAPH.nodes.map((n,i)=>n.hub?11:gRadius(toks[i],vmax))};
+  const tvmax=Math.max(1,...[...TRADERS.values()].map(t=>t.vol));
+  return {toks, R: GRAPH.nodes.map((n,i)=>
+    n.hub?11 : n.trader?8+15*Math.sqrt((TRADERS.get(n.w)||{vol:0}).vol/tvmax)
+    : gRadius(toks[i],vmax))};
 }
 function gStep(){
   if(tab!=='graph'||document.hidden){ GRAPH.raf=0; return; }
-  if(++GRAPH.frame%1800===0) buildGraph();          // refresh links every ~30s
+  if(++GRAPH.frame%600===0) buildGraph();           // refresh links every ~10s
+  if(GRAPH.frame%120===0) gProgress();
   const c=$('#gcanvas'), W=c.width/gDPR, H=c.height/gDPR;
   const N=GRAPH.nodes, {toks,R}=gRadii();
   for(let i=0;i<N.length;i++)for(let j=i+1;j<N.length;j++){
@@ -882,8 +971,8 @@ function gStep(){
     const a=N[e.a],b=N[e.b]; if(!a||!b) continue;
     let dx=b.x-a.x, dy=b.y-a.y;
     const d=Math.sqrt(dx*dx+dy*dy)||1;
-    const rest=R[e.a]+R[e.b]+(e.k==='creator'?36:e.k==='venue'?70:64);
-    const f=(d-rest)*(e.k==='creator'?.004:e.k==='venue'?.0015:.002);
+    const rest=R[e.a]+R[e.b]+(e.k==='creator'?36:e.k==='venue'?70:e.k==='flow'?55:64);
+    const f=(d-rest)*(e.k==='creator'?.004:e.k==='venue'?.0015:e.k==='flow'?.0025:.002);
     dx/=d; dy/=d;
     a.vx+=dx*f; a.vy+=dy*f; b.vx-=dx*f; b.vy-=dy*f;
   }
@@ -900,29 +989,67 @@ function gStep(){
   gDraw(W,H,R,toks);
   GRAPH.raf=requestAnimationFrame(gStep);
 }
+const IMGS = new Map();          // token logo cache for the bubbles
+function gImg(t){
+  if(!t.img) return null;
+  let rec = IMGS.get(t.img);
+  if(!rec){
+    rec = {ok:0, el:new Image()};
+    rec.el.crossOrigin = 'anonymous';
+    rec.el.onload = ()=>{ rec.ok = 1; };
+    rec.el.src = t.img;
+    IMGS.set(t.img, rec);
+  }
+  return rec.ok ? rec.el : null;
+}
+function gNeighbors(){
+  // focus set for hover: the hovered node and everything linked to it
+  if(!GRAPH.hover) return null;
+  const s = new Set([GRAPH.hover]);
+  for(const e of GRAPH.edges){
+    const a=GRAPH.nodes[e.a], b=GRAPH.nodes[e.b]; if(!a||!b) continue;
+    if(a.addr===GRAPH.hover) s.add(b.addr);
+    if(b.addr===GRAPH.hover) s.add(a.addr);
+  }
+  return s;
+}
 function gDraw(W,H,R,toks){
   const ctx=$('#gcanvas').getContext('2d');
   const v=GRAPH.view;
   ctx.setTransform(gDPR,0,0,gDPR,0,0);
   ctx.clearRect(0,0,W,H);
+  const vg=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*.2,W/2,H/2,Math.max(W,H)*.75);
+  vg.addColorStop(0,'#0D1015'); vg.addColorStop(1,'#080A0D');
+  ctx.fillStyle=vg; ctx.fillRect(0,0,W,H);
   ctx.setTransform(gDPR*v.k,0,0,gDPR*v.k,gDPR*v.x,gDPR*v.y);
   const css=getComputedStyle(document.documentElement);
-  const CU=css.getPropertyValue('--up'), CD=css.getPropertyValue('--down'),
-        CA=css.getPropertyValue('--acc'), CW=css.getPropertyValue('--warn');
+  const CU=css.getPropertyValue('--up').trim(), CD=css.getPropertyValue('--down').trim(),
+        CA=css.getPropertyValue('--acc').trim(), CW=css.getPropertyValue('--warn').trim();
+  const focus=gNeighbors();
   for(const e of GRAPH.edges){
     const a=GRAPH.nodes[e.a], b=GRAPH.nodes[e.b]; if(!a||!b) continue;
+    const inF = focus && (a.addr===GRAPH.hover || b.addr===GRAPH.hover);
     ctx.strokeStyle = e.k==='creator'?CA : e.k==='trader'?CW :
-                      e.k==='venue'?'#232B34' : '#3A4552';
-    ctx.globalAlpha = e.k==='venue'?.8 : e.k==='corr'?.4:.55;
-    ctx.lineWidth = (e.k==='trader'?Math.min(1+e.w*.5,3):1)/v.k;
-    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+                      e.k==='flow'?(e.dir>=0?CU:CD) :
+                      e.k==='venue'?'#26303B' : '#46525F';
+    ctx.globalAlpha = focus ? (inF?.9:.05)
+      : e.k==='venue'?.5 : e.k==='corr'?.35 : e.k==='flow'?.45 : .55;
+    ctx.lineWidth = (e.k==='trader'?Math.min(1+e.w*.5,3)
+      : e.k==='flow'?Math.min(.8+Math.log10(1+e.w)*.6,3.4) : 1)/v.k;
+    const mx=(a.x+b.x)/2, my=(a.y+b.y)/2;
+    const dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy)||1;
+    ctx.beginPath(); ctx.moveTo(a.x,a.y);
+    ctx.quadraticCurveTo(mx-dy/d*d*.08, my+dx/d*d*.08, b.x, b.y);
+    ctx.stroke();
   }
   ctx.globalAlpha=1;
   for(let i=0;i<GRAPH.nodes.length;i++){
     const n=GRAPH.nodes[i], r=R[i];
+    const dimmed = focus && !focus.has(n.addr);
+    ctx.globalAlpha = dimmed ? .18 : 1;
     if(n.hub){
       ctx.beginPath(); ctx.arc(n.x,n.y,r,0,7);
-      ctx.fillStyle='#151A21'; ctx.fill();
+      ctx.fillStyle='#141A22'; ctx.fill();
       ctx.lineWidth=1/v.k; ctx.strokeStyle='#3A4552'; ctx.stroke();
       ctx.fillStyle='#7A8794'; ctx.font='10px ui-monospace,monospace';
       ctx.textAlign='center';
@@ -930,23 +1057,65 @@ function gDraw(W,H,R,toks){
       ctx.fillText(String(n.n), n.x, n.y+3);
       continue;
     }
+    if(n.trader){
+      const tr=TRADERS.get(n.w)||{vol:0,pnl:0};
+      const up=tr.pnl>=0;
+      ctx.save();
+      if(n.addr===GRAPH.hover){ ctx.shadowColor=up?CU:CD; ctx.shadowBlur=18; }
+      ctx.beginPath();
+      ctx.moveTo(n.x,n.y-r); ctx.lineTo(n.x+r,n.y); ctx.lineTo(n.x,n.y+r); ctx.lineTo(n.x-r,n.y);
+      ctx.closePath();
+      ctx.fillStyle=up?'#12291C':'#2B1614'; ctx.fill();
+      ctx.lineWidth=1.4/v.k; ctx.strokeStyle=up?CU:CD; ctx.stroke();
+      ctx.restore();
+      if(r*v.k>=8){
+        ctx.fillStyle='#9AA6B2'; ctx.font='9.5px ui-monospace,monospace';
+        ctx.textAlign='center';
+        ctx.fillText(n.w.slice(2,6)+'…'+n.w.slice(-4), n.x, n.y+r+11);
+      }
+      continue;
+    }
     const t=toks[i]||{};
-    const up=(t.ch24h||0)>=0;
+    const up=(t.ch24h||0)>=0, col=up?CU:CD;
+    const hot=n.addr===GRAPH.hover||sel===n.addr||WATCH.has(n.addr);
+    ctx.save();
+    if(hot && !dimmed){ ctx.shadowColor=col; ctx.shadowBlur=16; }
+    const grad=ctx.createRadialGradient(n.x-r*.35,n.y-r*.35,r*.1,n.x,n.y,r);
+    grad.addColorStop(0, up?'rgba(95,208,140,.55)':'rgba(224,106,94,.55)');
+    grad.addColorStop(1, up?'rgba(95,208,140,.12)':'rgba(224,106,94,.12)');
     ctx.beginPath(); ctx.arc(n.x,n.y,r,0,7);
-    ctx.fillStyle = up?CU:CD;
-    ctx.globalAlpha = .16+Math.min(Math.abs(t.ch24h||0)/100,.5);
-    ctx.fill();
-    ctx.globalAlpha=1;
-    ctx.lineWidth = (WATCH.has(n.addr)?2:1)/v.k;
-    ctx.strokeStyle = WATCH.has(n.addr)?CW : sel===n.addr?CA : '#2E3A47';
+    ctx.fillStyle=grad; ctx.fill();
+    ctx.restore();
+    const img=gImg(t);
+    if(img && r>=9){
+      ctx.save();
+      ctx.globalAlpha = dimmed ? .18 : .92;
+      ctx.beginPath(); ctx.arc(n.x,n.y,r*.72,0,7); ctx.clip();
+      try{ ctx.drawImage(img, n.x-r*.72, n.y-r*.72, r*1.44, r*1.44); }catch(_){}
+      ctx.restore();
+      ctx.globalAlpha = dimmed ? .18 : 1;
+    }
+    ctx.beginPath(); ctx.arc(n.x,n.y,r,0,7);
+    ctx.lineWidth = (WATCH.has(n.addr)?2:1.2)/v.k;
+    ctx.strokeStyle = WATCH.has(n.addr)?CW : sel===n.addr?CA : up?'rgba(95,208,140,.65)':'rgba(224,106,94,.65)';
     ctx.stroke();
     if(r*v.k>=11){
-      ctx.fillStyle='#C6D0DA'; ctx.font='10.5px ui-monospace,monospace';
-      ctx.textAlign='center'; ctx.fillText((t.sym||'').slice(0,8), n.x, n.y+3.5);
+      ctx.fillStyle = dimmed?'#4E5A66':'#C6D0DA';
+      ctx.font='10.5px ui-monospace,monospace'; ctx.textAlign='center';
+      ctx.fillText((t.sym||'').slice(0,8), n.x, n.y+r+11);
     }
   }
+  ctx.globalAlpha=1;
 }
-function gStart(){ buildGraph(); if(!GRAPH.raf) GRAPH.raf=requestAnimationFrame(gStep); }
+function gStart(){ buildGraph(); gLegend(); gProgress();
+  if(!GRAPH.raf) GRAPH.raf=requestAnimationFrame(gStep); }
+$('#gmode').onclick = e => {
+  const b = e.target.closest('[data-gm]'); if(!b) return;
+  GRAPH.mode = b.dataset.gm;
+  document.querySelectorAll('#gmode [data-gm]').forEach(x=>x.classList.toggle('on', x===b));
+  GRAPH.nodes = []; GRAPH.edges = [];        // fresh layout per mode
+  buildGraph(); gLegend(); gProgress();
+};
 function gNodeAt(mx,my){
   const [wx,wy]=gWorld(mx,my);
   const {toks,R}=gRadii();
@@ -1296,10 +1465,40 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
   if(tab!=='graph') sort = {k: tab==='cca'?'raised':'vol24', d:-1};
   render();
 });
+function gLegend(){
+  $('#glegend').innerHTML = GRAPH.mode==='traders'
+    ? `diamonds: top wallets of the day · green outline: window pnl up, red: down ·
+       <span class="gl-r">lines: wallet traded that token, green bought more, red sold more</span> ·
+       pnl is an estimate over the visible 24h trades only ·
+       click a wallet for its explorer page · drag · pan · wheel zoom`
+    : `size: volume &amp; depth · colour: 24h move · hollow nodes: venues ·
+       lines: <span class="gl-c">same creator</span> ·
+       <span class="gl-t">shared recent traders</span> ·
+       <span class="gl-r">correlated price</span> · faint: listed on that venue ·
+       drag bubbles · drag empty space to pan · wheel to zoom`;
+}
+function gProgress(){
+  if(GRAPH.mode!=='traders'){ $('#gprog').textContent=''; return; }
+  const toks = topTokens(70).filter(t=>!('clearing' in t));
+  const done = toks.filter(t=>t._tr_at).length;
+  $('#gprog').textContent = done<toks.length
+    ? `reading trades ${done}/${toks.length} pools · ${TRADERS.size} wallets`
+    : `${TRADERS.size} wallets · 24h window`;
+}
 function gTip(e, n){
   const tip = $('#gtip'), rc = $('#gcanvas').getBoundingClientRect();
   if(!n){ tip.hidden = true; return; }
-  if(n.hub){
+  if(n.trader){
+    const tr = TRADERS.get(n.w);
+    if(!tr){ tip.hidden = true; return; }
+    const top = [...tr.toks.entries()].sort((a,b)=>b[1].usd-a[1].usd).slice(0,4)
+      .map(([a,st])=>{ const t=T.get(a)||{};
+        return `${esc(t.sym||a.slice(0,8))} ${dUsd(st.usd)} <span class="${st.pnl>=0?'up':'down'}">${st.pnl>=0?'+':''}${dUsd(Math.abs(st.pnl))}</span>`; })
+      .join('<br>');
+    tip.innerHTML = `<b>${esc(n.w.slice(0,10))}…</b><br>
+      <span class="dim">24h vol ${dUsd(tr.vol)} · bought ${dUsd(tr.buys)} · sold ${dUsd(tr.sells)}</span><br>
+      window pnl <span class="${tr.pnl>=0?'up':'down'}">${tr.pnl>=0?'+':''}${dUsd(Math.abs(tr.pnl))}</span> <span class="dim">(est., 24h trades only)</span><br>${top}`;
+  } else if(n.hub){
     tip.innerHTML = `<b>${esc(n.label)}</b><br><span class="dim">${n.n} of the top 100 trade here</span>`;
   } else {
     const t = T.get(n.addr) || {};
@@ -1351,7 +1550,10 @@ gc.onpointerup = gc.onpointercancel = e => {
   const rc = gc.getBoundingClientRect();
   if(GRAPH.drag){
     const d = GRAPH.drag; d.n.pin = 0;
-    if(d.moved < 5 && !d.n.hub) select(d.n.addr);     // a tap is a click
+    if(d.moved < 5){                                   // a tap is a click
+      if(d.n.trader) window.open('https://robinhoodchain.blockscout.com/address/'+d.n.w, '_blank');
+      else if(!d.n.hub) select(d.n.addr);
+    }
     GRAPH.drag = null;
   } else if(GRAPH.pan){
     GRAPH.pan = null; gc.style.cursor = 'grab';

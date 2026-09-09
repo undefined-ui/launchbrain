@@ -56,14 +56,20 @@ GeckoTerminal OHLCV endpoint, fetched on selection and cached five minutes,
 with honest fallbacks (pools.trade snapshot series, then local snapshots) and
 the source named under the chart.
 
-**Graph.** A fourth tab: the top 100 as a force layout on a canvas (hand
-rolled, no library). A blend of the chain's movers and the launchpad's movers
-— the launchpad half is where link data exists. Edges the data can prove:
-same creator wallet (accent), shared recent trader wallets (warn), correlated
-hourly closes (dim, threshold 0.85). While the tab is open the chart job warms
-OHLCV for graph nodes, so correlation links form progressively. Size is
-volume/depth, colour is the 24h move, watchlist rings glow. Click a bubble to
-open the token.
+**Graph.** A fourth tab: a force layout on a canvas (hand rolled, no library;
+gradients, glow, curved edges, token logos, hover focus). Two modes:
+
+- *traders* (default): the top wallets of the day as diamonds, linked to the
+  tokens they traded. Built from GeckoTerminal `pools/{pool}/trades` (~300
+  rows per pool, `tx_from_address`, CORS-open, verified September 2026), read
+  progressively while the tab is open. "pnl" is an estimate over the visible
+  24h window only — sells minus buys plus net position at current price — and
+  the legend says so. Click a wallet for its explorer page.
+- *venues*: tokens hang off exchange hubs; creator / shared-trader /
+  correlation edges on top. The chart job warms OHLCV for correlation links in
+  this mode only (in traders mode the gecko budget goes to trades).
+
+Drag bubbles, drag empty space to pan, wheel to zoom. A tap opens the token.
 
 **Ask.** Each token page has a chat: a model gets the token's JSON and answers
 in 1-3 sentences, in the user's language. Provider layer in `AI_PROVIDERS`:
