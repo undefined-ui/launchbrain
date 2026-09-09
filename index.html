@@ -904,11 +904,12 @@ function buildGraph(){
   });
   const tokNode=new Map(GRAPH.nodes.map(n=>[n.addr,n]));
   if(GRAPH.mode==='traders'){
-    // top wallets of the day: volume weighted, multi-token wallets boosted —
-    // they are the ones worth following
+    // the day's most profitable wallets — smart money only, losers hidden;
+    // a wallet with no drawable position would float unconnected, skip it
     const top=[...TRADERS.values()]
-      .sort((a,b)=>b.vol*Math.sqrt(b.toks.size)-a.vol*Math.sqrt(a.toks.size))
-      .slice(0,100);
+      .filter(t=>t.pnl>0 && [...t.toks.entries()]
+        .some(([ta,st])=>st.usd>=5 && tokNode.has(ta)))
+      .sort((a,b)=>b.pnl-a.pnl).slice(0,150);
     for(const tr of top){
       const a='tr:'+tr.w, o=old.get(a);
       if(o){ GRAPH.nodes.push(o); continue; }
@@ -967,17 +968,24 @@ function buildGraph(){
   }
   corr.sort((x,y)=>y[2]-x[2]).slice(0,120).forEach(([a,b,r])=>push(a,b,'corr',r));
   if(GRAPH.mode==='traders'){
-    const flows=[];
+    // every wallet keeps its biggest position on the map — a diamond with no
+    // line is meaningless — the cap only trims secondary links
+    const prim=[], sec=[];
     for(const n of GRAPH.nodes){
       if(!n.trader) continue;
       const tr=TRADERS.get(n.w); if(!tr) continue;
-      // a wallet shows its four biggest positions; more is visual noise
-      [...tr.toks.entries()].sort((x,y)=>y[1].usd-x[1].usd).slice(0,4)
-        .forEach(([ta,st])=>{ if(idx.has(ta) && st.usd>=20) flows.push([n.addr,ta,st]); });
+      const mine=[...tr.toks.entries()].filter(([ta,st])=>idx.has(ta)&&st.usd>=5)
+        .sort((x,y)=>y[1].usd-x[1].usd).slice(0,4);
+      mine.forEach(([ta,st],i)=>(i?sec:prim).push([n.addr,ta,st]));
     }
-    flows.sort((x,y)=>y[2].usd-x[2].usd).slice(0,400)
-      .forEach(([a,b,st])=>
-        edges.push({a:idx.get(a),b:idx.get(b),k:'flow',w:st.usd,dir:st.b>=st.s?1:-1}));
+    const tflow=new Map();
+    prim.concat(sec.sort((x,y)=>y[2].usd-x[2].usd).slice(0,Math.max(0,450-prim.length)))
+      .forEach(([a,b,st])=>{
+        edges.push({a:idx.get(a),b:idx.get(b),k:'flow',w:st.usd,dir:st.b>=st.s?1:-1});
+        tflow.set(b,(tflow.get(b)||0)+st.usd);
+      });
+    // in this mode a token's size is the mapped wallet flow through it
+    GRAPH.tflow=tflow; GRAPH.tfmax=Math.max(1,...tflow.values());
   } else {
     for(const t of toks) push(t.addr,'hub:'+gVenue(t),'venue');
   }
@@ -994,9 +1002,11 @@ function gRadius(t,vmax){
 function gRadii(){
   const toks=GRAPH.nodes.map(n=>(n.hub||n.trader)?null:(T.get(n.addr)||{}));
   const vmax=Math.max(1,...toks.map(t=>t?Math.max(t.vol24||0,t.liq||0):0));
-  const tvmax=Math.max(1,...[...TRADERS.values()].map(t=>t.vol));
+  const pmax=Math.max(1,...[...TRADERS.values()].map(t=>t.pnl>0?t.pnl:0));
+  const fl=GRAPH.mode==='traders'&&GRAPH.tflow;
   return {toks, R: GRAPH.nodes.map((n,i)=>
-    n.hub?11 : n.trader?8+15*Math.sqrt((TRADERS.get(n.w)||{vol:0}).vol/tvmax)
+    n.hub?11 : n.trader?7+16*Math.sqrt(Math.max(0,(TRADERS.get(n.w)||{pnl:0}).pnl)/pmax)
+    : fl?9+27*Math.sqrt((GRAPH.tflow.get(n.addr)||0)/GRAPH.tfmax)
     : gRadius(toks[i],vmax))};
 }
 function gStep(){
@@ -1017,10 +1027,14 @@ function gStep(){
     const a=N[e.a],b=N[e.b]; if(!a||!b) continue;
     let dx=b.x-a.x, dy=b.y-a.y;
     const d=Math.sqrt(dx*dx+dy*dy)||1;
-    const rest=R[e.a]+R[e.b]+(e.k==='creator'?46:e.k==='venue'?86:e.k==='flow'?76:80);
+    // a popular token pushes its wallet ring outward, so the star stays open
+    const rest=R[e.a]+R[e.b]+(e.k==='creator'?46:e.k==='venue'?86
+      :e.k==='flow'?50+Math.min(130,((deg[e.a]||0)+(deg[e.b]||0))*1.8):80);
     // hubs pull gently: spring strength falls with the degree of its ends
     const soft=1/Math.sqrt(Math.max(1,(deg[e.a]||1)+(deg[e.b]||1)-1));
-    const f=(d-rest)*(e.k==='creator'?.005:e.k==='venue'?.002:.006)*soft;
+    let k=e.k==='creator'?.005:e.k==='venue'?.002:.006;
+    if(e.k==='flow' && d<rest) k*=3;   // compressed rings pop open fast
+    const f=(d-rest)*k*soft;
     dx/=d; dy/=d;
     a.vx+=dx*f; a.vy+=dy*f; b.vx-=dx*f; b.vy-=dy*f;
   }
@@ -1094,7 +1108,7 @@ function gDraw(W,H,R,toks){
                       e.k==='flow'?(e.dir>=0?CU:CD) :
                       e.k==='venue'?'#26303B' : '#46525F';
     ctx.globalAlpha = focus ? (inF?.9:.05)
-      : e.k==='venue'?.5 : e.k==='corr'?.35 : e.k==='flow'?.3 : .55;
+      : e.k==='venue'?.5 : e.k==='corr'?.35 : e.k==='flow'?.42 : .55;
     ctx.lineWidth = (e.k==='trader'?Math.min(1+e.w*.5,3)
       : e.k==='flow'?Math.min(.8+Math.log10(1+e.w)*.6,3.4) : 1)/v.k;
     const mx=(a.x+b.x)/2, my=(a.y+b.y)/2;
@@ -1558,7 +1572,8 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
 });
 function gLegend(){
   $('#glegend').innerHTML = GRAPH.mode==='traders'
-    ? `diamonds: top wallets of the day · green outline: window pnl up, red: down ·
+    ? `diamonds: the day's most profitable wallets · size: estimated pnl ·
+       losing wallets are hidden ·
        <span class="gl-r">lines: wallet traded that token, green bought more, red sold more</span> ·
        pnl is an estimate over the visible 24h trades only ·
        click a wallet for its explorer page · drag · pan · wheel zoom`
@@ -1572,9 +1587,10 @@ function gProgress(){
   if(GRAPH.mode!=='traders'){ $('#gprog').textContent=''; return; }
   const toks = topTokens(TR_TOKENS).filter(t=>!('clearing' in t));
   const done = toks.filter(t=>t._tr_at).length;
-  $('#gprog').textContent = done<toks.length
-    ? `reading trades ${done}/${toks.length} pools · ${TRADERS.size} wallets`
-    : `${TRADERS.size} wallets · 24h window`;
+  const shown = GRAPH.nodes.filter(n=>n.trader).length;
+  $('#gprog').textContent =
+    (done<toks.length ? `reading trades ${done}/${toks.length} pools · ` : '')
+    + `${TRADERS.size} wallets seen · top ${shown} by pnl on the map`;
 }
 function gTip(e, n){
   const tip = $('#gtip'), rc = $('#gcanvas').getBoundingClientRect();
