@@ -208,31 +208,48 @@ def bs_call(path):
 CENSUS_SORT = "?type=ERC-20&sort=holders_count&order=desc"
 
 
+def census_qs(np):
+    """next_page_params back into a query string. Python would serialise its
+    booleans as True/False, which silently breaks blockscout's cursor and
+    every page comes back as page one."""
+    clean = {}
+    for k, v in (np or {}).items():
+        if v is None:
+            continue
+        clean[k] = ("true" if v else "false") if isinstance(v, bool) else v
+    return urllib.parse.urlencode(clean)
+
+
 def harvest_census(pages=80, floor=150, budget=240):
     """Top of the chain by holder count. The market-cap listing ends after a
     few hundred rows because most tokens have no known fiat value; holders is
     the sort that surfaces real tokens no pool listing shows."""
-    out, t0, qs = [], time.time(), CENSUS_SORT
+    out, seen_a, t0, qs = [], set(), time.time(), CENSUS_SORT
     for _ in range(pages):
         if time.time() - t0 > budget:
             break
         doc = bs_call("/tokens" + qs)
         if not doc:
             break
-        low = False
+        low, fresh_rows = False, 0
         for i in doc.get("items") or []:
             a = (i.get("address_hash") or i.get("address") or "").lower()
             h = int(num(i.get("holders_count") or i.get("holders")))
-            if a.startswith("0x"):
+            if a.startswith("0x") and a not in seen_a:
+                seen_a.add(a)
+                fresh_rows += 1
                 out.append({"addr": a, "sym": i.get("symbol"), "name": i.get("name"),
                             "holders": h, "mcap": num(i.get("circulating_market_cap"))})
             if h and h < floor:
                 low = True
         np = doc.get("next_page_params")
-        if low or not np:
+        # a page with nothing new means the cursor is broken; stop rather than
+        # re-read page one eighty times
+        if low or not np or not fresh_rows:
             break
-        qs = CENSUS_SORT + "&" + urllib.parse.urlencode(np)
+        qs = CENSUS_SORT + "&" + census_qs(np)
         time.sleep(0.4)
+    print(f"  census walked {len(out)} unique rows in {int(time.time()-t0)}s")
     return out
 
 
