@@ -293,7 +293,7 @@ def ds_fill(addr):
     }
 
 
-def harvest_trades(rows, top_n=60, budget=200):
+def harvest_trades(rows, top_n=60, budget=320):
     """Per-wallet trade aggregates for the busiest pools, so the trader map
     on the graph tab paints instantly from the baseline instead of every
     visitor spending four minutes reading pools themselves. Kept compact:

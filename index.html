@@ -883,18 +883,52 @@ function buildGraph(){
     for(const n of GRAPH.nodes){ n.x*=sx; n.y*=sy; }
   }
   GRAPH.W=W; GRAPH.H=H;
-  const toks=topTokens(GRAPH.mode==='traders'?TR_TOKENS:100);
+  // traders mode maps only tokens whose trades are read: the picture grows
+  // as pools stream in and always fills the canvas, instead of a ring of
+  // inert bubbles crowding the working part into a corner
+  const toks = GRAPH.mode==='traders'
+    ? topTokens(TR_TOKENS).filter(t=>t._traders && t._traders.size)
+    : topTokens(100);
   const old=new Map(GRAPH.nodes.map(n=>[n.addr,n]));
   GRAPH.nodes=toks.map(t=>old.get(t.addr)||{
     addr:t.addr,
     x:W/2+(Math.random()-.5)*W*.7, y:H/2+(Math.random()-.5)*H*.7, vx:0, vy:0});
+  // fresh token nodes start on a wide ring instead of at random, so the
+  // layout untangles instead of collapsing into the middle
+  const ring=Math.min(W,H)*.38;
+  GRAPH.nodes.forEach((n,i)=>{
+    if(!old.has(n.addr)){
+      const a=i/Math.max(1,toks.length)*6.283;
+      n.x=W/2+Math.cos(a)*ring; n.y=H/2+Math.sin(a)*ring;
+    }
+  });
+  const tokNode=new Map(GRAPH.nodes.map(n=>[n.addr,n]));
   if(GRAPH.mode==='traders'){
-    // top wallets of the day, sized by traded volume, coloured by window pnl
-    const top=[...TRADERS.values()].sort((a,b)=>b.vol-a.vol).slice(0,100);
+    // top wallets of the day: volume weighted, multi-token wallets boosted —
+    // they are the ones worth following
+    const top=[...TRADERS.values()]
+      .sort((a,b)=>b.vol*Math.sqrt(b.toks.size)-a.vol*Math.sqrt(a.toks.size))
+      .slice(0,100);
     for(const tr of top){
       const a='tr:'+tr.w, o=old.get(a);
-      GRAPH.nodes.push(o||{addr:a, trader:1, w:tr.w,
-        x:W/2+(Math.random()-.5)*W*.5, y:H/2+(Math.random()-.5)*H*.5, vx:0, vy:0});
+      if(o){ GRAPH.nodes.push(o); continue; }
+      // born where it belongs: a one-token wallet takes a deterministic
+      // orbit around its token (clean stars), a multi-token wallet starts
+      // at the centroid of its tokens
+      const mine=[...tr.toks.keys()].filter(ta=>tokNode.has(ta));
+      let px=W/2, py=H/2;
+      if(mine.length===1){
+        const tn=tokNode.get(mine[0]);
+        const ang=(parseInt(tr.w.slice(2,10),16)%6283)/1000;
+        const rr=55+(parseInt(tr.w.slice(-4),16)%60);
+        px=tn.x+Math.cos(ang)*rr; py=tn.y+Math.sin(ang)*rr;
+      } else if(mine.length){
+        px=0; py=0;
+        for(const ta of mine){ const tn=tokNode.get(ta); px+=tn.x; py+=tn.y; }
+        px=px/mine.length+(Math.random()-.5)*60;
+        py=py/mine.length+(Math.random()-.5)*60;
+      }
+      GRAPH.nodes.push({addr:a, trader:1, w:tr.w, x:px, y:py, vx:0, vy:0});
     }
   } else {
     // venue hubs: every token hangs off its exchange, so the map is connected
@@ -937,17 +971,21 @@ function buildGraph(){
     for(const n of GRAPH.nodes){
       if(!n.trader) continue;
       const tr=TRADERS.get(n.w); if(!tr) continue;
-      for(const [ta,st] of tr.toks){
-        if(idx.has(ta) && st.usd>=20) flows.push([n.addr,ta,st]);
-      }
+      // a wallet shows its four biggest positions; more is visual noise
+      [...tr.toks.entries()].sort((x,y)=>y[1].usd-x[1].usd).slice(0,4)
+        .forEach(([ta,st])=>{ if(idx.has(ta) && st.usd>=20) flows.push([n.addr,ta,st]); });
     }
-    flows.sort((x,y)=>y[2].usd-x[2].usd).slice(0,500)
-      .forEach(([a,b,st])=>{ const key=a+b;
-        edges.push({a:idx.get(a),b:idx.get(b),k:'flow',w:st.usd,dir:st.b>=st.s?1:-1}); });
+    flows.sort((x,y)=>y[2].usd-x[2].usd).slice(0,400)
+      .forEach(([a,b,st])=>
+        edges.push({a:idx.get(a),b:idx.get(b),k:'flow',w:st.usd,dir:st.b>=st.s?1:-1}));
   } else {
     for(const t of toks) push(t.addr,'hub:'+gVenue(t),'venue');
   }
   GRAPH.edges=edges;
+  // node degree, for degree-normalised springs: a hub everyone trades must
+  // not drag its whole neighbourhood into one clump
+  GRAPH.deg=GRAPH.nodes.map(()=>0);
+  for(const e of edges){ GRAPH.deg[e.a]++; GRAPH.deg[e.b]++; }
   if($('#t4')) $('#t4').textContent=GRAPH.nodes.length;
 }
 function gRadius(t,vmax){
@@ -967,11 +1005,11 @@ function gStep(){
   if(GRAPH.frame%120===0) gProgress();
   const c=$('#gcanvas'), W=c.width/gDPR, H=c.height/gDPR;
   const N=GRAPH.nodes, {toks,R}=gRadii();
+  const deg=GRAPH.deg||[];
   for(let i=0;i<N.length;i++)for(let j=i+1;j<N.length;j++){
     const a=N[i],b=N[j]; let dx=b.x-a.x, dy=b.y-a.y;
-    const d2=dx*dx+dy*dy||1, d=Math.sqrt(d2), min=R[i]+R[j]+6;
-    let f=Math.min(1400/d2,.7);                       // repulsion
-    if(d<min) f+=(min-d)*.02;                         // no overlap
+    const d2=dx*dx+dy*dy||1, d=Math.sqrt(d2);
+    let f=Math.min(2600/d2,1.1);                      // repulsion
     dx/=d; dy/=d;
     a.vx-=dx*f; a.vy-=dy*f; b.vx+=dx*f; b.vy+=dy*f;
   }
@@ -979,20 +1017,35 @@ function gStep(){
     const a=N[e.a],b=N[e.b]; if(!a||!b) continue;
     let dx=b.x-a.x, dy=b.y-a.y;
     const d=Math.sqrt(dx*dx+dy*dy)||1;
-    const rest=R[e.a]+R[e.b]+(e.k==='creator'?36:e.k==='venue'?70:e.k==='flow'?55:64);
-    const f=(d-rest)*(e.k==='creator'?.004:e.k==='venue'?.0015:e.k==='flow'?.0025:.002);
+    const rest=R[e.a]+R[e.b]+(e.k==='creator'?46:e.k==='venue'?86:e.k==='flow'?76:80);
+    // hubs pull gently: spring strength falls with the degree of its ends
+    const soft=1/Math.sqrt(Math.max(1,(deg[e.a]||1)+(deg[e.b]||1)-1));
+    const f=(d-rest)*(e.k==='creator'?.005:e.k==='venue'?.002:.006)*soft;
     dx/=d; dy/=d;
     a.vx+=dx*f; a.vy+=dy*f; b.vx-=dx*f; b.vy-=dy*f;
   }
   for(let i=0;i<N.length;i++){
     const n=N[i];
     if(n.pin){ n.vx=0; n.vy=0; continue; }            // held by the user
-    n.vx+=(W/2-n.x)*.0005+(Math.random()-.5)*.06;    // gravity + idle wobble
-    n.vy+=(H/2-n.y)*.0005+(Math.random()-.5)*.06;
-    n.vx*=.92; n.vy*=.92;
+    n.vx+=(W/2-n.x)*.00025+(Math.random()-.5)*.05;   // gravity + idle wobble
+    n.vy+=(H/2-n.y)*.00025+(Math.random()-.5)*.05;
+    n.vx*=.9; n.vy*=.9;
     const sp=Math.hypot(n.vx,n.vy);
-    if(sp>2.5){ n.vx*=2.5/sp; n.vy*=2.5/sp; }
+    if(sp>3){ n.vx*=3/sp; n.vy*=3/sp; }
     n.x+=n.vx; n.y+=n.vy;
+  }
+  // hard de-overlap: whatever the forces say, bubbles never sit on top of
+  // each other
+  for(let i=0;i<N.length;i++)for(let j=i+1;j<N.length;j++){
+    const a=N[i],b=N[j];
+    let dx=b.x-a.x, dy=b.y-a.y;
+    const d=Math.hypot(dx,dy)||.01;
+    const min=R[i]+R[j]+((N[i].trader&&N[j].trader)?14:4);
+    if(d<min){
+      const push=(min-d)/2/d;
+      if(!a.pin){ a.x-=dx*push; a.y-=dy*push; }
+      if(!b.pin){ b.x+=dx*push; b.y+=dy*push; }
+    }
   }
   gDraw(W,H,R,toks);
   GRAPH.raf=requestAnimationFrame(gStep);
@@ -1041,7 +1094,7 @@ function gDraw(W,H,R,toks){
                       e.k==='flow'?(e.dir>=0?CU:CD) :
                       e.k==='venue'?'#26303B' : '#46525F';
     ctx.globalAlpha = focus ? (inF?.9:.05)
-      : e.k==='venue'?.5 : e.k==='corr'?.35 : e.k==='flow'?.45 : .55;
+      : e.k==='venue'?.5 : e.k==='corr'?.35 : e.k==='flow'?.3 : .55;
     ctx.lineWidth = (e.k==='trader'?Math.min(1+e.w*.5,3)
       : e.k==='flow'?Math.min(.8+Math.log10(1+e.w)*.6,3.4) : 1)/v.k;
     const mx=(a.x+b.x)/2, my=(a.y+b.y)/2;
@@ -1076,7 +1129,7 @@ function gDraw(W,H,R,toks){
       ctx.fillStyle=up?'#12291C':'#2B1614'; ctx.fill();
       ctx.lineWidth=1.4/v.k; ctx.strokeStyle=up?CU:CD; ctx.stroke();
       ctx.restore();
-      if(r*v.k>=8){
+      if(r*v.k>=13 || n.addr===GRAPH.hover){
         ctx.fillStyle='#9AA6B2'; ctx.font='9.5px ui-monospace,monospace';
         ctx.textAlign='center';
         ctx.fillText(n.w.slice(2,6)+'…'+n.w.slice(-4), n.x, n.y+r+11);
