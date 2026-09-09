@@ -120,6 +120,16 @@ textarea{width:100%;min-height:92px;background:var(--panel2);border:1px solid va
 #chatf input::placeholder{color:var(--faint)}
 #chatf button{border:1px solid #27596B;border-radius:3px;padding:6px 10px;color:#9FE2F2;background:#16303A}
 .empty{color:var(--faint);padding:40px 14px;text-align:center}
+#list[hidden],#graphwrap[hidden]{display:none}
+#graphwrap{position:relative;overflow:hidden;min-height:0;background:var(--bg)}
+#gcanvas{display:block;width:100%;height:100%;cursor:default}
+#glegend{position:absolute;left:10px;bottom:8px;color:var(--faint);font-size:10.5px;
+  pointer-events:none;max-width:90%}
+.gl-c{color:var(--acc)}.gl-t{color:var(--warn)}.gl-r{color:var(--dim)}
+#gtip{position:absolute;background:var(--panel);border:1px solid var(--line);border-radius:3px;
+  padding:7px 9px;font-size:11.5px;pointer-events:none;z-index:5;max-width:230px}
+#gtip b{font-size:12.5px}
+@media(max-width:980px){main.detail #graphwrap{display:none}}
 footer{flex:0 0 auto;border-top:1px solid var(--line);background:var(--panel);
   padding:6px 14px;color:var(--faint);font-size:11px;display:flex;gap:16px}
 kbd{border:1px solid var(--line);border-radius:3px;padding:0 4px;color:var(--dim)}
@@ -148,6 +158,7 @@ kbd{border:1px solid var(--line);border-radius:3px;padding:0 4px;color:var(--dim
     <button data-tab="curve" class="on">Launches<b id="t1"></b></button>
     <button data-tab="cca">Auctions<b id="t2"></b></button>
     <button data-tab="watch">Watchlist<b id="t3"></b></button>
+    <button data-tab="graph">Graph<b id="t4"></b></button>
   </div>
   <div class="filters" id="filters">
     <button class="chip on" data-f="nospam">hide spam</button>
@@ -165,6 +176,15 @@ kbd{border:1px solid var(--line);border-radius:3px;padding:0 4px;color:var(--dim
 
 <main id="main">
   <div id="list"><div class="empty">loading data…</div></div>
+  <div id="graphwrap" hidden>
+    <canvas id="gcanvas"></canvas>
+    <div id="glegend">size: volume &amp; depth · colour: 24h move ·
+      lines: <span class="gl-c">same creator</span> ·
+      <span class="gl-t">shared recent traders</span> ·
+      <span class="gl-r">correlated price</span> ·
+      creator and trader links come from the pools.trade snapshot</div>
+    <div id="gtip" hidden></div>
+  </div>
   <div id="detail"><div class="empty">select a token</div></div>
 </main>
 
@@ -486,12 +506,22 @@ async function censusStep(){
    tracked pool id is tried first; when it is not a GT pool (pools.trade ids
    sometimes differ) the token's pool list resolves the deepest one. */
 function chartNeed(){
-  if(!sel) return null;
-  const t = T.get(sel);
-  if(!t || 'clearing' in t) return null;
-  if(t._ohlcv && nowS() - t._ohlcv_at < 300) return null;   // fresh enough
-  if(t._chart_err && nowS() - t._chart_err < 180) return null;
-  return t;
+  if(sel){
+    const t = T.get(sel);
+    if(t && !('clearing' in t)
+       && !(t._ohlcv && nowS() - t._ohlcv_at < 300)
+       && !(t._chart_err && nowS() - t._chart_err < 180)) return t;
+  }
+  // the graph warms candles for its nodes so correlation links can form
+  if(tab === 'graph' && !document.hidden){
+    for(const n of GRAPH.nodes){
+      const t = T.get(n.addr);
+      if(t && !('clearing' in t)
+         && !(t._ohlcv && nowS() - t._ohlcv_at < 3600)
+         && !(t._chart_err && nowS() - t._chart_err < 600)) return t;
+    }
+  }
+  return null;
 }
 async function chartStep(){
   const t = chartNeed(); if(!t) return;
@@ -686,6 +716,14 @@ function drawPending(){
 let structDirty = true;
 function render(){ structDirty = true; paint(); }
 function paint(){
+  const g = tab==='graph';
+  $('#graphwrap').hidden = !g;
+  $('#list').hidden = g;
+  if(g){
+    $('#shown').textContent = GRAPH.nodes.length+' nodes · '+GRAPH.edges.length+' links';
+    gStart();
+    return;
+  }
   const r = rows();
   $('#shown').textContent = r.length+' shown';
   if(!r.length && structDirty){
@@ -720,6 +758,162 @@ function paint(){
 
 /* ---------- detail panel ---------- */
 function find(a){ return T.get(a) || CCA.find(x=>x.addr===a); }
+
+/* ---------- graph: the risk topology of the top 100 ----------
+   The table says what moves; the graph says who is connected to whom.
+   Edges the data can actually prove: two tokens deployed by the same
+   creator wallet, two tokens sharing recent trader wallets, and two
+   tokens whose price series move together. Hand-rolled force layout on
+   a canvas — no library, per the one-file rule. */
+const GRAPH = {nodes:[], edges:[], raf:0, frame:0, hover:null};
+const gDPR = window.devicePixelRatio || 1;
+
+function topTokens(n){
+  // a blend: the chain's movers plus the launchpad's movers. The launchpad
+  // half is where creator and trader links exist at all.
+  const all = [...T.values()].filter(t=>!t.spam && !('clearing' in t) && t.sym)
+    .sort((a,b)=>Math.max(b.vol24||0,b.liq||0)-Math.max(a.vol24||0,a.liq||0));
+  const out = all.slice(0, Math.round(n*0.6));
+  const have = new Set(out.map(t=>t.addr));
+  for(const t of all){
+    if(out.length >= n) break;
+    if(t.grad != null && !have.has(t.addr)){ have.add(t.addr); out.push(t); }
+  }
+  for(const t of all){                        // pad if few launchpad tokens
+    if(out.length >= n) break;
+    if(!have.has(t.addr)){ have.add(t.addr); out.push(t); }
+  }
+  return out;
+}
+function gRets(s){
+  if(!s || s.length<20) return null;
+  const r=[]; for(let i=1;i<s.length;i++){
+    if(s[i-1]>0 && s[i]>0) r.push(Math.log(s[i]/s[i-1])); }
+  return r.length>=15 ? r : null;
+}
+function gPearson(a,b){
+  const n=Math.min(a.length,b.length); if(n<15) return 0;
+  let sa=0,sb=0; for(let i=0;i<n;i++){sa+=a[i];sb+=b[i];}
+  const ma=sa/n, mb=sb/n; let cov=0,va=0,vb=0;
+  for(let i=0;i<n;i++){const x=a[i]-ma,y=b[i]-mb;cov+=x*y;va+=x*x;vb+=y*y;}
+  return va&&vb ? cov/Math.sqrt(va*vb) : 0;
+}
+function buildGraph(){
+  const wrap=$('#graphwrap'), c=$('#gcanvas');
+  const W=wrap.clientWidth||800, H=wrap.clientHeight||500;
+  c.width=W*gDPR; c.height=H*gDPR;
+  const toks=topTokens(100);
+  const old=new Map(GRAPH.nodes.map(n=>[n.addr,n]));
+  GRAPH.nodes=toks.map(t=>old.get(t.addr)||{
+    addr:t.addr,
+    x:W/2+(Math.random()-.5)*W*.7, y:H/2+(Math.random()-.5)*H*.7, vx:0, vy:0});
+  const idx=new Map(GRAPH.nodes.map((n,i)=>[n.addr,i]));
+  const edges=[], pair=new Set();
+  const push=(a,b,k,w)=>{ const key=a<b?a+b:b+a;
+    if(a!==b && !pair.has(key+k)){ pair.add(key+k); edges.push({a:idx.get(a),b:idx.get(b),k,w:w||1}); } };
+  const byC={};
+  for(const t of toks){ const cr=t.creator||t.chandle;
+    if(cr)(byC[cr]=byC[cr]||[]).push(t.addr); }
+  for(const cr in byC){ const g=byC[cr];
+    for(let i=0;i<g.length;i++)for(let j=i+1;j<g.length;j++) push(g[i],g[j],'creator'); }
+  const tr=toks.map(t=>({a:t.addr,s:new Set((t.trades||[]).map(x=>x.trader).filter(Boolean))}));
+  for(let i=0;i<tr.length;i++)for(let j=i+1;j<tr.length;j++){
+    if(!tr[i].s.size||!tr[j].s.size) continue;
+    let n=0; for(const v of tr[i].s) if(tr[j].s.has(v)) n++;
+    if(n) push(tr[i].a,tr[j].a,'trader',n);
+  }
+  const rs=toks.map(t=>({a:t.addr,r:gRets(t._ohlcv&&t._ohlcv.length>19?t._ohlcv:t.series)}));
+  const corr=[];
+  for(let i=0;i<rs.length;i++)for(let j=i+1;j<rs.length;j++){
+    if(!rs[i].r||!rs[j].r) continue;
+    const r=gPearson(rs[i].r,rs[j].r);
+    if(r>=.85) corr.push([rs[i].a,rs[j].a,r]);
+  }
+  corr.sort((x,y)=>y[2]-x[2]).slice(0,120).forEach(([a,b,r])=>push(a,b,'corr',r));
+  GRAPH.edges=edges;
+  if($('#t4')) $('#t4').textContent=GRAPH.nodes.length;
+}
+function gRadius(t,vmax){
+  return 6+22*Math.sqrt(Math.max(t.vol24||0,t.liq||0)/(vmax||1));
+}
+function gStep(){
+  if(tab!=='graph'||document.hidden){ GRAPH.raf=0; return; }
+  if(++GRAPH.frame%1800===0) buildGraph();          // refresh links every ~30s
+  const c=$('#gcanvas'), W=c.width/gDPR, H=c.height/gDPR;
+  const N=GRAPH.nodes, toks=N.map(n=>T.get(n.addr)||{});
+  const vmax=Math.max(1,...toks.map(t=>Math.max(t.vol24||0,t.liq||0)));
+  const R=toks.map(t=>gRadius(t,vmax));
+  for(let i=0;i<N.length;i++)for(let j=i+1;j<N.length;j++){
+    const a=N[i],b=N[j]; let dx=b.x-a.x, dy=b.y-a.y;
+    const d2=dx*dx+dy*dy||1, d=Math.sqrt(d2), min=R[i]+R[j]+6;
+    let f=Math.min(1200/d2,.6);                       // repulsion
+    if(d<min) f+=(min-d)*.02;                         // no overlap
+    dx/=d; dy/=d;
+    a.vx-=dx*f; a.vy-=dy*f; b.vx+=dx*f; b.vy+=dy*f;
+  }
+  for(const e of GRAPH.edges){
+    const a=N[e.a],b=N[e.b]; if(!a||!b) continue;
+    let dx=b.x-a.x, dy=b.y-a.y;
+    const d=Math.sqrt(dx*dx+dy*dy)||1, rest=R[e.a]+R[e.b]+(e.k==='creator'?36:64);
+    const f=(d-rest)*(e.k==='creator'?.004:.002);
+    dx/=d; dy/=d;
+    a.vx+=dx*f; a.vy+=dy*f; b.vx-=dx*f; b.vy-=dy*f;
+  }
+  for(let i=0;i<N.length;i++){
+    const n=N[i];
+    n.vx+=(W/2-n.x)*.0006+(Math.random()-.5)*.06;    // gravity + idle wobble
+    n.vy+=(H/2-n.y)*.0006+(Math.random()-.5)*.06;
+    n.vx*=.92; n.vy*=.92;
+    const sp=Math.hypot(n.vx,n.vy);
+    if(sp>2.5){ n.vx*=2.5/sp; n.vy*=2.5/sp; }
+    n.x=Math.max(R[i],Math.min(W-R[i],n.x+n.vx));
+    n.y=Math.max(R[i],Math.min(H-R[i],n.y+n.vy));
+  }
+  gDraw(W,H,R,toks);
+  GRAPH.raf=requestAnimationFrame(gStep);
+}
+function gDraw(W,H,R,toks){
+  const ctx=$('#gcanvas').getContext('2d');
+  ctx.setTransform(gDPR,0,0,gDPR,0,0);
+  ctx.clearRect(0,0,W,H);
+  const css=getComputedStyle(document.documentElement);
+  const CU=css.getPropertyValue('--up'), CD=css.getPropertyValue('--down'),
+        CA=css.getPropertyValue('--acc'), CW=css.getPropertyValue('--warn');
+  for(const e of GRAPH.edges){
+    const a=GRAPH.nodes[e.a], b=GRAPH.nodes[e.b]; if(!a||!b) continue;
+    ctx.strokeStyle = e.k==='creator'?CA : e.k==='trader'?CW : '#3A4552';
+    ctx.globalAlpha = e.k==='corr'?.35:.5;
+    ctx.lineWidth = e.k==='trader'?Math.min(1+e.w*.5,3):1;
+    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+  }
+  ctx.globalAlpha=1;
+  for(let i=0;i<GRAPH.nodes.length;i++){
+    const n=GRAPH.nodes[i], t=toks[i], r=R[i];
+    const up=(t.ch24h||0)>=0;
+    ctx.beginPath(); ctx.arc(n.x,n.y,r,0,7);
+    ctx.fillStyle = up?CU:CD;
+    ctx.globalAlpha = .16+Math.min(Math.abs(t.ch24h||0)/100,.5);
+    ctx.fill();
+    ctx.globalAlpha=1;
+    ctx.lineWidth = WATCH.has(n.addr)?2:1;
+    ctx.strokeStyle = WATCH.has(n.addr)?CW : sel===n.addr?CA : '#2E3A47';
+    ctx.stroke();
+    if(r>=13){
+      ctx.fillStyle='#C6D0DA'; ctx.font='10.5px ui-monospace,monospace';
+      ctx.textAlign='center'; ctx.fillText((t.sym||'').slice(0,8), n.x, n.y+3.5);
+    }
+  }
+}
+function gStart(){ buildGraph(); if(!GRAPH.raf) GRAPH.raf=requestAnimationFrame(gStep); }
+function gNodeAt(mx,my){
+  const toks=GRAPH.nodes.map(n=>T.get(n.addr)||{});
+  const vmax=Math.max(1,...toks.map(t=>Math.max(t.vol24||0,t.liq||0)));
+  for(let i=GRAPH.nodes.length-1;i>=0;i--){
+    const n=GRAPH.nodes[i];
+    if(Math.hypot(mx-n.x,my-n.y)<=gRadius(toks[i],vmax)+2) return n;
+  }
+  return null;
+}
 
 function sparkSeries(x){
   if(x._ohlcv && x._ohlcv.length>1) return x._ohlcv;        // real hourly closes
@@ -1056,8 +1250,34 @@ $('#q').oninput = e => {
 };
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b));
-  tab = b.dataset.tab; sort = {k: tab==='cca'?'raised':'vol24', d:-1}; render();
+  tab = b.dataset.tab;
+  if(tab!=='graph') sort = {k: tab==='cca'?'raised':'vol24', d:-1};
+  render();
 });
+$('#gcanvas').onmousemove = e => {
+  const rc = e.target.getBoundingClientRect();
+  const n = gNodeAt(e.clientX-rc.left, e.clientY-rc.top);
+  GRAPH.hover = n && n.addr;
+  e.target.style.cursor = n ? 'pointer' : 'default';
+  const tip = $('#gtip');
+  if(!n){ tip.hidden = true; return; }
+  const t = T.get(n.addr) || {};
+  tip.innerHTML = `<b>${esc(t.sym||'?')}</b> <span class="dim">${esc(t.name||'')}</span><br>
+    ${dPx(t.price)} · <span class="${cls(t.ch24h)}">${dPct(t.ch24h)}</span> 24h<br>
+    <span class="dim">vol ${dUsd(t.vol24)} · liq ${dUsd(t.liq)}
+    ${t.holders?' · '+t.holders+' holders':''}</span>
+    ${t.creator?'<br><span class="dim">creator '+esc(String(t.creator).slice(0,10))+'…</span>':''}`;
+  tip.hidden = false;
+  const wrap = $('#graphwrap');
+  tip.style.left = Math.min(e.clientX-rc.left+14, wrap.clientWidth-240)+'px';
+  tip.style.top = Math.max(e.clientY-rc.top-10, 4)+'px';
+};
+$('#gcanvas').onmouseleave = () => { $('#gtip').hidden = true; GRAPH.hover = null; };
+$('#gcanvas').onclick = e => {
+  const rc = e.target.getBoundingClientRect();
+  const n = gNodeAt(e.clientX-rc.left, e.clientY-rc.top);
+  if(n) select(n.addr);
+};
 $('#filters').onclick = e => {
   const c = e.target.closest('.chip'); if(!c) return;
   if(c.id==='pend'){ const r=rows(); if(tbodyEl) reorder(r); else render(); return; }
@@ -1096,7 +1316,10 @@ async function boot(){
     DIRTY.clear();
   }, 1000);
   setInterval(drawStatus, 30000);         // keep the snapshot age honest
-  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) pump(); });
+  document.addEventListener('visibilitychange', ()=>{
+    if(!document.hidden){ pump(); if(tab==='graph') gStart(); }
+  });
+  window.addEventListener('resize', ()=>{ if(tab==='graph') buildGraph(); });
 }
 let paintedNew = 0;
 $('#foot').innerHTML = 'live from geckoterminal + dexscreener · holders, graduation and safety from the pools.trade snapshot · not financial advice';

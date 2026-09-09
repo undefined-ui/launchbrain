@@ -56,6 +56,15 @@ GeckoTerminal OHLCV endpoint, fetched on selection and cached five minutes,
 with honest fallbacks (pools.trade snapshot series, then local snapshots) and
 the source named under the chart.
 
+**Graph.** A fourth tab: the top 100 as a force layout on a canvas (hand
+rolled, no library). A blend of the chain's movers and the launchpad's movers
+— the launchpad half is where link data exists. Edges the data can prove:
+same creator wallet (accent), shared recent trader wallets (warn), correlated
+hourly closes (dim, threshold 0.85). While the tab is open the chart job warms
+OHLCV for graph nodes, so correlation links form progressively. Size is
+volume/depth, colour is the 24h move, watchlist rings glow. Click a bubble to
+open the token.
+
 **Ask.** Each token page has a chat: a model gets the token's JSON and answers
 in 1-3 sentences, in the user's language. Provider layer in `AI_PROVIDERS`:
 
