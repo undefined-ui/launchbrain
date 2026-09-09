@@ -83,23 +83,18 @@ export default {
   // Cloudflare's punctual cron stands in for GitHub's jittery one: each
   // firing dispatches the update-data workflow. No token, no action.
   async scheduled(event, env, ctx) {
-    if (!env.GITHUB_TOKEN) return;
-    ctx.waitUntil(fetch(
-      'https://api.github.com/repos/undefined-ui/launchbrain/actions/workflows/update.yml/dispatches',
-      {
-        method: 'POST',
-        headers: {
-          'authorization': 'Bearer ' + env.GITHUB_TOKEN,
-          'accept': 'application/vnd.github+json',
-          'user-agent': 'launchbrain-cron',
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({ ref: 'main' }),
-      },
-    ));
+    ctx.waitUntil(dispatchHarvest(env).then(r =>
+      console.log('cron dispatch:', r.status, r.body.slice(0, 200))));
   },
 
   async fetch(req, env) {
+    // GET /cron-test fires one dispatch and shows GitHub's verbatim answer,
+    // so a silent token problem has nowhere to hide
+    if (req.method === 'GET' && new URL(req.url).pathname === '/cron-test') {
+      const r = await dispatchHarvest(env);
+      return json({ github_status: r.status, github_body: r.body.slice(0, 400) },
+        200);
+    }
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
     if (req.method === 'GET')       // which models the relay would try, in order
       return json({ candidates: env.GROQ_API_KEY ? await candidates(env) : [] }, 200);
@@ -148,6 +143,28 @@ export default {
     });
   },
 };
+
+async function dispatchHarvest(env) {
+  if (!env.GITHUB_TOKEN) return { status: 0, body: 'GITHUB_TOKEN secret is missing' };
+  try {
+    const r = await fetch(
+      'https://api.github.com/repos/undefined-ui/launchbrain/actions/workflows/update.yml/dispatches',
+      {
+        method: 'POST',
+        headers: {
+          'authorization': 'Bearer ' + env.GITHUB_TOKEN,
+          'accept': 'application/vnd.github+json',
+          'user-agent': 'launchbrain-cron',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ ref: 'main' }),
+      },
+    );
+    return { status: r.status, body: await r.text() };  // 204 = accepted
+  } catch (e) {
+    return { status: -1, body: String(e) };
+  }
+}
 
 function json(obj, status) {
   return new Response(JSON.stringify(obj), {
