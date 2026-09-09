@@ -1,0 +1,9 @@
+.git
+.github
+.gitignore
+.assetsignore
+scripts
+worker
+wrangler.toml
+CLAUDE.md
+TASK.md

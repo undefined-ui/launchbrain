@@ -1,9 +1,15 @@
-# Cloudflare Worker config: the chat relay (worker/chat.js).
-# The worker is git-connected to this repo; every push redeploys it.
-# The GROQ_API_KEY secret is set in the Cloudflare dashboard, never here.
+# Cloudflare Worker config: one worker serves the whole product.
+# GET requests are answered from the repo's static files (the terminal and
+# its data/), everything else falls through to worker/chat.js — the chat
+# relay. Git-connected: every push redeploys. The GROQ_API_KEY secret is
+# set in the Cloudflare dashboard, never here.
 name = "launchbrain"
 main = "worker/chat.js"
 compatibility_date = "2026-09-01"
+
+[assets]
+directory = "./"
+not_found_handling = "none"
 
 [observability.logs]
 enabled = true
