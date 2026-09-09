@@ -80,6 +80,25 @@ function cleanContent(raw) {
 }
 
 export default {
+  // Cloudflare's punctual cron stands in for GitHub's jittery one: each
+  // firing dispatches the update-data workflow. No token, no action.
+  async scheduled(event, env, ctx) {
+    if (!env.GITHUB_TOKEN) return;
+    ctx.waitUntil(fetch(
+      'https://api.github.com/repos/undefined-ui/launchbrain/actions/workflows/update.yml/dispatches',
+      {
+        method: 'POST',
+        headers: {
+          'authorization': 'Bearer ' + env.GITHUB_TOKEN,
+          'accept': 'application/vnd.github+json',
+          'user-agent': 'launchbrain-cron',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ ref: 'main' }),
+      },
+    ));
+  },
+
   async fetch(req, env) {
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
     if (req.method === 'GET')       // which models the relay would try, in order

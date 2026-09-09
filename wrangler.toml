@@ -13,3 +13,10 @@ not_found_handling = "none"
 
 [observability.logs]
 enabled = true
+
+# GitHub's own cron for this repo fires with hours of jitter, which punches
+# holes in the trades ledger. Cloudflare's cron is punctual: every firing
+# dispatches the update-data workflow (needs the GITHUB_TOKEN secret; the
+# scheduled handler is a no-op without it).
+[triggers]
+crons = ["*/20 * * * *"]
