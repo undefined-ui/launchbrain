@@ -159,8 +159,9 @@ h4{font-size:10.5px;color:var(--faint);letter-spacing:.09em;margin:14px 0 6px;fo
 .acts button{border:1px solid var(--line);border-radius:9px;padding:6px 12px;color:var(--dim);
   transition:border-color .15s,color .15s,box-shadow .15s}
 .acts button:hover{color:var(--tx);border-color:#2E3A47}
-.acts button.pri{background:var(--upbg);border-color:rgba(44,224,139,.4);color:var(--up)}
-.acts button.pri:hover{box-shadow:0 0 14px rgba(44,224,139,.18)}
+.acts button.pri,.acts .abtn.pri{background:var(--upbg);border-color:rgba(44,224,139,.4);color:var(--up)}
+.acts button.pri:hover,.acts .abtn.pri:hover{box-shadow:0 0 14px rgba(44,224,139,.18);text-decoration:none}
+.acts .abtn{display:inline-block;border:1px solid var(--line);border-radius:9px;padding:6px 12px}
 textarea{width:100%;min-height:92px;background:var(--panel2);border:1px solid var(--line);
   border-radius:10px;color:var(--tx);padding:9px;font:inherit;resize:vertical;
   transition:border-color .15s}
@@ -1487,8 +1488,16 @@ function select(a){
   if(prev) prev.classList.remove('sel');
   const tr = rowMap.get(a); if(tr) tr.classList.add('sel');
   $('#main').classList.add('detail');
+  // where you can actually buy it: the launchpad curve before graduation,
+  // uniswap once a real pool exists
+  const onCurve = x.launchpad==='pools.trade' && (x.grad??0) < 100;
+  const buyUrl = onCurve
+    ? `https://pools.trade/token/${esc(x.addr)}`
+    : `https://app.uniswap.org/swap?chain=robinhood&outputCurrency=${esc(x.addr)}`;
+  const buyLabel = onCurve ? 'buy on pools.trade' : 'buy on uniswap';
   const links = [
     x.x ? `<a href="${esc(x.x)}" rel="noopener">X</a>` : '',
+    `<a href="https://app.uniswap.org/explore/tokens/robinhood/${esc(x.addr)}" rel="noopener">uniswap</a>`,
     (x._base || x.grad!=null) ? `<a href="https://pools.trade/token/${esc(x.addr)}" rel="noopener">pools.trade</a>` : '',
     `<a href="https://dexscreener.com/robinhood/${esc(x.addr)}" rel="noopener">dexscreener</a>`,
     `<a href="https://robinhoodchain.blockscout.com/address/${esc(x.addr)}" rel="noopener">explorer</a>`,
@@ -1527,7 +1536,8 @@ function select(a){
     <h4>YOUR NOTES</h4>
     <textarea id="note" placeholder="what you noticed. this is what gets filed into your vault.">${esc(NOTES[x.addr]||'')}</textarea>
     <div class="acts">
-      <button class="pri" id="d_exp">export page</button>
+      <a class="pri abtn" href="${buyUrl}" target="_blank" rel="noopener">${buyLabel} ↗</a>
+      <button id="d_exp">export page</button>
       <button id="d_expw">export watchlist</button>
     </div>`;
   $('#d_star').onclick = ()=>toggleWatch(x.addr);
