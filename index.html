@@ -132,9 +132,10 @@ td.fld{animation:lbfld .9s}
 .dh{display:flex;align-items:baseline;gap:8px;margin-bottom:2px}
 .dh h2{font-family:"Space Grotesk",sans-serif;font-size:20px;letter-spacing:-.01em}
 .dsub{color:var(--dim);font-size:12px;margin-bottom:12px}
-.spark{width:100%;height:84px;margin:6px 0 4px;
+.spark{width:100%;height:auto;margin:6px 0 4px;
   background:linear-gradient(180deg,#0E141C,#0B1016);
   border:1px solid var(--line);border-radius:12px}
+.ms{width:64px;height:18px;vertical-align:middle;display:inline-block}
 .kv{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:14px}
 .kv div{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
   padding:8px 10px;transition:border-color .15s}
@@ -570,6 +571,15 @@ function chartNeed(){
        && !(t._ohlcv && nowS() - t._ohlcv_at < 300)
        && !(t._chart_err && nowS() - t._chart_err < 180)) return t;
   }
+  // the table warms candles for its top rows so the minis fill in
+  if((tab==='curve'||tab==='watch') && !document.hidden && Array.isArray(lastOrder)){
+    for(const a of lastOrder.slice(0,40)){
+      const t = T.get(a);
+      if(t && !('clearing' in t)
+         && !(t._ohlcv && nowS()-t._ohlcv_at < 3600)
+         && !(t._chart_err && nowS()-t._chart_err < 900)) return t;
+    }
+  }
   // the graph warms candles for its nodes so correlation links can form
   // (in traders mode the gecko budget goes to the trades feed instead)
   if(tab === 'graph' && GRAPH.mode !== 'traders' && !document.hidden){
@@ -590,9 +600,12 @@ async function chartStep(){
     const d = await api(GT+'pools/'+(t.gt_pool||t.pool)+'/ohlcv/hour?aggregate=1&limit=72');
     const list = (((d||{}).data||{}).attributes||{}).ohlcv_list || [];
     if(list.length >= 2){
-      t._ohlcv = list.slice().reverse().map(r=>+r[4]);     // closes, oldest first
+      const rows = list.slice().reverse();                 // oldest first
+      t._ohlcv = rows.map(r=>+r[4]);
+      t._ohlcvT = [rows[0][0], rows[rows.length-1][0]];    // span for the axis
       t._ohlcv_at = nowS(); t._pool_ok = 1;
       if(sel === t.addr) updateDetail(t);
+      if(!DIRTY.has(t.addr)) DIRTY.set(t.addr, 0);         // row mini refreshes
     } else if(!t._pool_ok) await chartResolve(t);
     else t._chart_err = nowS();
   }catch(e){
@@ -652,11 +665,11 @@ function rows(){
 
 /* ---------- table, updated in place ---------- */
 const COLS = {
- curve: [['sym','token'],['desc',''],['created','age'],['price','price'],
+ curve: [['sym','token'],['desc',''],['','chart'],['created','age'],['price','price'],
    ['ch1h','1h'],['ch24h','24h'],['vol24','vol 24h'],['liq','liquidity'],
    ['fdv','fdv'],['holders','holders'],['buyers1h','buyers 1h'],
    ['first_seen','seen'],['grad','graduation']],
- cca: [['sym','token'],['desc',''],['ends','ends'],['clearing','clearing'],
+ cca: [['sym','token'],['desc',''],['','chart'],['ends','ends'],['clearing','clearing'],
    ['floor','floor'],['raised','raised'],['raised1h','1h'],['fdv','fdv'],
    ['bidders','bidders'],['holders','holders'],['grad','progress']]
 };
@@ -669,6 +682,7 @@ const CELLS = {
       :`<span class="tico ph">${esc((x.sym||'?').slice(0,1))}</span>`}
     <span class="sym">${esc(x.sym||'?')}</span></span>${x.xok?' <span class="tag x">X</span>':''}${x.spam?' <span class="tag spam">spam</span>':''}${isNewTag(x)}`, ()=>''],
   [x=>`<span class="nm">${esc(x.name||'')}</span>`, ()=>''],
+  [x=>miniSpark(x), ()=>''],
   [x=>x.created?ago(x.created):'—', ()=>'dim'],
   [x=>dPx(x.price), ()=>''],
   [x=>`<span class="pc">${dPct(x.ch1h)}</span>`, x=>cls(x.ch1h)],
@@ -688,6 +702,7 @@ const CELLS = {
       :`<span class="tico ph">${esc((x.sym||'?').slice(0,1))}</span>`}
     <span class="sym">${esc(x.sym||'?')}</span></span>${x.xok?' <span class="tag x">X</span>':''}${x.spam?' <span class="tag spam">spam</span>':''}`, ()=>''],
   [x=>`<span class="nm">${esc(x.name||'')}</span>`, ()=>''],
+  [x=>miniSpark(x), ()=>''],
   [x=>x.ends?ago(x.ends):'—', ()=>'dim'],
   [x=>dPx(x.clearing), ()=>''],
   [x=>dPx(x.floor), ()=>'dim'],
@@ -733,7 +748,7 @@ function updateRow(tr, x, dir){
     const td = tds[i];
     if(td._h !== html || td.dataset.k !== kl){
       td.innerHTML = html; td._h = html; td.dataset.k = kl;
-      const flash = i===3 && dir ? (dir>0?'flu':'fld') : 'fl';
+      const flash = i===4 && dir ? (dir>0?'flu':'fld') : 'fl';
       td.className = kl ? kl+' '+flash : flash;
       td.addEventListener('animationend', ()=>{ td.className = td.dataset.k||''; }, {once:true});
     }
@@ -1297,15 +1312,54 @@ function chartLabel(x){
 function spark(x){
   const series = sparkSeries(x);
   if(!series || series.length<2) return '<div class="spark"></div>';
-  const w=340,h=74,p=6, mn=Math.min(...series), mx=Math.max(...series), rg=(mx-mn)||1;
-  const pts = series.map((v,i)=>[p+i*(w-2*p)/(series.length-1), h-p-((v-mn)/rg)*(h-2*p)]);
-  const d = pts.map((q,i)=>(i?'L':'M')+q[0].toFixed(1)+','+q[1].toFixed(1)).join(' ');
-  const up = series[series.length-1] >= series[0];
-  const col = up ? 'var(--up)' : 'var(--down)';
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
-    <path d="${d} L${pts[pts.length-1][0].toFixed(1)},${h} L${pts[0][0].toFixed(1)},${h} Z"
-      fill="${col}" fill-opacity=".1"/>
-    <path d="${d}" fill="none" stroke="${col}" stroke-width="1.5"/></svg>`;
+  // annotated: grid, min/mid/max price on the right, the live point,
+  // and the time span underneath — a chart, not a decoration
+  const w=340, h=112, L=6, Rax=278, T=10, B=88;
+  const mn=Math.min(...series), mx=Math.max(...series), rg=(mx-mn)||mn||1;
+  const px=i=>L+i*(Rax-L)/(series.length-1);
+  const py=v=>B-((v-mn)/rg)*(B-T);
+  const pts=series.map((v,i)=>[px(i),py(v)]);
+  const d=pts.map((q,i)=>(i?'L':'M')+q[0].toFixed(1)+','+q[1].toFixed(1)).join(' ');
+  const up=series[series.length-1]>=series[0];
+  const col=up?'var(--up)':'var(--down)';
+  const last=pts[pts.length-1];
+  let t0=null,t1=null;
+  if(x._ohlcv&&x._ohlcv.length>1&&x._ohlcvT){ t0=x._ohlcvT[0]; t1=x._ohlcvT[1]; }
+  else { const hp=(x.hist||[]).filter(p=>p[1]>0);
+    if(hp.length>1&&series.length===hp.length){ t0=hp[0][0]; t1=hp[hp.length-1][0]; } }
+  const lt=t0?agoU(t0)+' ago':'', rt=t1?(nowS()-t1<5400?'now':agoU(t1)+' ago'):'';
+  const grid=[mx,(mx+mn)/2,mn];
+  const ax=grid.map(v=>`<line x1="${L}" y1="${py(v).toFixed(1)}" x2="${Rax}" y2="${py(v).toFixed(1)}"
+      stroke="#1C232D" stroke-width="1"/>
+    <text x="${Rax+5}" y="${(py(v)+3).toFixed(1)}" fill="var(--faint)" font-size="8.5"
+      font-family="JetBrains Mono,monospace">${dPx(v)}</text>`).join('');
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}">
+    ${ax}
+    <path d="${d} L${last[0].toFixed(1)},${B} L${pts[0][0].toFixed(1)},${B} Z"
+      fill="${col}" fill-opacity=".08"/>
+    <path d="${d}" fill="none" stroke="${col}" stroke-width="1.6"
+      stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="4.5" fill="${col}" fill-opacity=".2"/>
+    <circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="2" fill="${col}"/>
+    <text x="${L}" y="${h-6}" fill="var(--faint)" font-size="8.5"
+      font-family="JetBrains Mono,monospace">${lt}</text>
+    <text x="${Rax}" y="${h-6}" text-anchor="end" fill="var(--dim)" font-size="8.5"
+      font-family="JetBrains Mono,monospace">${rt}</text></svg>`;
+}
+function miniSpark(x){
+  let s = x._ohlcv&&x._ohlcv.length>1 ? x._ohlcv
+    : x.series&&x.series.length>1 ? x.series
+    : (x.hist||[]).map(p=>p[1]).filter(v=>v>0);
+  if(!s || s.length<2) return '<span class="dim">·</span>';
+  const st=Math.max(1,Math.floor(s.length/24));
+  s=s.filter((_,i)=>i%st===0 || i===s.length-1);
+  const w=64,h=18,p=2, mn=Math.min(...s), mx=Math.max(...s), rg=(mx-mn)||1;
+  const d=s.map((v,i)=>(i?'L':'M')
+    +(p+i*(w-2*p)/(s.length-1)).toFixed(1)+','
+    +(h-p-((v-mn)/rg)*(h-2*p)).toFixed(1)).join(' ');
+  const col=s[s.length-1]>=s[0]?'var(--up)':'var(--down)';
+  return `<svg class="ms" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <path d="${d}" fill="none" stroke="${col}" stroke-width="1.3" stroke-opacity=".85"/></svg>`;
 }
 function srcLine(x){
   const parts = [];
