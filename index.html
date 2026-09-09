@@ -178,11 +178,11 @@ kbd{border:1px solid var(--line);border-radius:3px;padding:0 4px;color:var(--dim
   <div id="list"><div class="empty">loading data…</div></div>
   <div id="graphwrap" hidden>
     <canvas id="gcanvas"></canvas>
-    <div id="glegend">size: volume &amp; depth · colour: 24h move ·
+    <div id="glegend">size: volume &amp; depth · colour: 24h move · hollow nodes: venues ·
       lines: <span class="gl-c">same creator</span> ·
       <span class="gl-t">shared recent traders</span> ·
-      <span class="gl-r">correlated price</span> ·
-      creator and trader links come from the pools.trade snapshot</div>
+      <span class="gl-r">correlated price</span> · faint: listed on that venue ·
+      drag bubbles · drag empty space to pan · wheel to zoom</div>
     <div id="gtip" hidden></div>
   </div>
   <div id="detail"><div class="empty">select a token</div></div>
@@ -765,8 +765,15 @@ function find(a){ return T.get(a) || CCA.find(x=>x.addr===a); }
    creator wallet, two tokens sharing recent trader wallets, and two
    tokens whose price series move together. Hand-rolled force layout on
    a canvas — no library, per the one-file rule. */
-const GRAPH = {nodes:[], edges:[], raf:0, frame:0, hover:null};
+const GRAPH = {nodes:[], edges:[], raf:0, frame:0, hover:null,
+  view:{x:0,y:0,k:1}, drag:null, pan:null};
 const gDPR = window.devicePixelRatio || 1;
+function gWorld(mx,my){ const v=GRAPH.view; return [(mx-v.x)/v.k, (my-v.y)/v.k]; }
+function gVenue(t){
+  if(t.launchpad==='pools.trade' || t.grad!=null) return 'pools.trade';
+  const d = (t.dex||'').replace(/-robinhood$/,'').replace(/-dex$/,'');
+  return d || 'unknown venue';
+}
 
 function topTokens(n){
   // a blend: the chain's movers plus the launchpad's movers. The launchpad
@@ -802,11 +809,27 @@ function buildGraph(){
   const wrap=$('#graphwrap'), c=$('#gcanvas');
   const W=wrap.clientWidth||800, H=wrap.clientHeight||500;
   c.width=W*gDPR; c.height=H*gDPR;
+  if(GRAPH.W && (GRAPH.W!==W || GRAPH.H!==H)){   // canvas resized: keep layout
+    const sx=W/GRAPH.W, sy=H/GRAPH.H;
+    for(const n of GRAPH.nodes){ n.x*=sx; n.y*=sy; }
+  }
+  GRAPH.W=W; GRAPH.H=H;
   const toks=topTokens(100);
   const old=new Map(GRAPH.nodes.map(n=>[n.addr,n]));
   GRAPH.nodes=toks.map(t=>old.get(t.addr)||{
     addr:t.addr,
     x:W/2+(Math.random()-.5)*W*.7, y:H/2+(Math.random()-.5)*H*.7, vx:0, vy:0});
+  // venue hubs: every token hangs off its exchange, so the map is connected
+  // even before creator, trader and correlation links show up
+  const venues={};
+  for(const t of toks){ const v=gVenue(t); venues[v]=(venues[v]||0)+1; }
+  for(const v in venues){
+    const a='hub:'+v;
+    const o=old.get(a);
+    GRAPH.nodes.push(o||{addr:a, hub:1, label:v, n:venues[v],
+      x:W/2+(Math.random()-.5)*W*.5, y:H/2+(Math.random()-.5)*H*.5, vx:0, vy:0});
+    if(o){ o.label=v; o.n=venues[v]; }
+  }
   const idx=new Map(GRAPH.nodes.map((n,i)=>[n.addr,i]));
   const edges=[], pair=new Set();
   const push=(a,b,k,w)=>{ const key=a<b?a+b:b+a;
@@ -827,26 +850,30 @@ function buildGraph(){
   for(let i=0;i<rs.length;i++)for(let j=i+1;j<rs.length;j++){
     if(!rs[i].r||!rs[j].r) continue;
     const r=gPearson(rs[i].r,rs[j].r);
-    if(r>=.85) corr.push([rs[i].a,rs[j].a,r]);
+    if(r>=.75) corr.push([rs[i].a,rs[j].a,r]);
   }
   corr.sort((x,y)=>y[2]-x[2]).slice(0,120).forEach(([a,b,r])=>push(a,b,'corr',r));
+  for(const t of toks) push(t.addr,'hub:'+gVenue(t),'venue');
   GRAPH.edges=edges;
   if($('#t4')) $('#t4').textContent=GRAPH.nodes.length;
 }
 function gRadius(t,vmax){
   return 6+22*Math.sqrt(Math.max(t.vol24||0,t.liq||0)/(vmax||1));
 }
+function gRadii(){
+  const toks=GRAPH.nodes.map(n=>n.hub?null:(T.get(n.addr)||{}));
+  const vmax=Math.max(1,...toks.map(t=>t?Math.max(t.vol24||0,t.liq||0):0));
+  return {toks, R: GRAPH.nodes.map((n,i)=>n.hub?11:gRadius(toks[i],vmax))};
+}
 function gStep(){
   if(tab!=='graph'||document.hidden){ GRAPH.raf=0; return; }
   if(++GRAPH.frame%1800===0) buildGraph();          // refresh links every ~30s
   const c=$('#gcanvas'), W=c.width/gDPR, H=c.height/gDPR;
-  const N=GRAPH.nodes, toks=N.map(n=>T.get(n.addr)||{});
-  const vmax=Math.max(1,...toks.map(t=>Math.max(t.vol24||0,t.liq||0)));
-  const R=toks.map(t=>gRadius(t,vmax));
+  const N=GRAPH.nodes, {toks,R}=gRadii();
   for(let i=0;i<N.length;i++)for(let j=i+1;j<N.length;j++){
     const a=N[i],b=N[j]; let dx=b.x-a.x, dy=b.y-a.y;
     const d2=dx*dx+dy*dy||1, d=Math.sqrt(d2), min=R[i]+R[j]+6;
-    let f=Math.min(1200/d2,.6);                       // repulsion
+    let f=Math.min(1400/d2,.7);                       // repulsion
     if(d<min) f+=(min-d)*.02;                         // no overlap
     dx/=d; dy/=d;
     a.vx-=dx*f; a.vy-=dy*f; b.vx+=dx*f; b.vy+=dy*f;
@@ -854,51 +881,66 @@ function gStep(){
   for(const e of GRAPH.edges){
     const a=N[e.a],b=N[e.b]; if(!a||!b) continue;
     let dx=b.x-a.x, dy=b.y-a.y;
-    const d=Math.sqrt(dx*dx+dy*dy)||1, rest=R[e.a]+R[e.b]+(e.k==='creator'?36:64);
-    const f=(d-rest)*(e.k==='creator'?.004:.002);
+    const d=Math.sqrt(dx*dx+dy*dy)||1;
+    const rest=R[e.a]+R[e.b]+(e.k==='creator'?36:e.k==='venue'?70:64);
+    const f=(d-rest)*(e.k==='creator'?.004:e.k==='venue'?.0015:.002);
     dx/=d; dy/=d;
     a.vx+=dx*f; a.vy+=dy*f; b.vx-=dx*f; b.vy-=dy*f;
   }
   for(let i=0;i<N.length;i++){
     const n=N[i];
-    n.vx+=(W/2-n.x)*.0006+(Math.random()-.5)*.06;    // gravity + idle wobble
-    n.vy+=(H/2-n.y)*.0006+(Math.random()-.5)*.06;
+    if(n.pin){ n.vx=0; n.vy=0; continue; }            // held by the user
+    n.vx+=(W/2-n.x)*.0005+(Math.random()-.5)*.06;    // gravity + idle wobble
+    n.vy+=(H/2-n.y)*.0005+(Math.random()-.5)*.06;
     n.vx*=.92; n.vy*=.92;
     const sp=Math.hypot(n.vx,n.vy);
     if(sp>2.5){ n.vx*=2.5/sp; n.vy*=2.5/sp; }
-    n.x=Math.max(R[i],Math.min(W-R[i],n.x+n.vx));
-    n.y=Math.max(R[i],Math.min(H-R[i],n.y+n.vy));
+    n.x+=n.vx; n.y+=n.vy;
   }
   gDraw(W,H,R,toks);
   GRAPH.raf=requestAnimationFrame(gStep);
 }
 function gDraw(W,H,R,toks){
   const ctx=$('#gcanvas').getContext('2d');
+  const v=GRAPH.view;
   ctx.setTransform(gDPR,0,0,gDPR,0,0);
   ctx.clearRect(0,0,W,H);
+  ctx.setTransform(gDPR*v.k,0,0,gDPR*v.k,gDPR*v.x,gDPR*v.y);
   const css=getComputedStyle(document.documentElement);
   const CU=css.getPropertyValue('--up'), CD=css.getPropertyValue('--down'),
         CA=css.getPropertyValue('--acc'), CW=css.getPropertyValue('--warn');
   for(const e of GRAPH.edges){
     const a=GRAPH.nodes[e.a], b=GRAPH.nodes[e.b]; if(!a||!b) continue;
-    ctx.strokeStyle = e.k==='creator'?CA : e.k==='trader'?CW : '#3A4552';
-    ctx.globalAlpha = e.k==='corr'?.35:.5;
-    ctx.lineWidth = e.k==='trader'?Math.min(1+e.w*.5,3):1;
+    ctx.strokeStyle = e.k==='creator'?CA : e.k==='trader'?CW :
+                      e.k==='venue'?'#232B34' : '#3A4552';
+    ctx.globalAlpha = e.k==='venue'?.8 : e.k==='corr'?.4:.55;
+    ctx.lineWidth = (e.k==='trader'?Math.min(1+e.w*.5,3):1)/v.k;
     ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
   }
   ctx.globalAlpha=1;
   for(let i=0;i<GRAPH.nodes.length;i++){
-    const n=GRAPH.nodes[i], t=toks[i], r=R[i];
+    const n=GRAPH.nodes[i], r=R[i];
+    if(n.hub){
+      ctx.beginPath(); ctx.arc(n.x,n.y,r,0,7);
+      ctx.fillStyle='#151A21'; ctx.fill();
+      ctx.lineWidth=1/v.k; ctx.strokeStyle='#3A4552'; ctx.stroke();
+      ctx.fillStyle='#7A8794'; ctx.font='10px ui-monospace,monospace';
+      ctx.textAlign='center';
+      ctx.fillText(n.label.slice(0,16), n.x, n.y-r-5);
+      ctx.fillText(String(n.n), n.x, n.y+3);
+      continue;
+    }
+    const t=toks[i]||{};
     const up=(t.ch24h||0)>=0;
     ctx.beginPath(); ctx.arc(n.x,n.y,r,0,7);
     ctx.fillStyle = up?CU:CD;
     ctx.globalAlpha = .16+Math.min(Math.abs(t.ch24h||0)/100,.5);
     ctx.fill();
     ctx.globalAlpha=1;
-    ctx.lineWidth = WATCH.has(n.addr)?2:1;
+    ctx.lineWidth = (WATCH.has(n.addr)?2:1)/v.k;
     ctx.strokeStyle = WATCH.has(n.addr)?CW : sel===n.addr?CA : '#2E3A47';
     ctx.stroke();
-    if(r>=13){
+    if(r*v.k>=11){
       ctx.fillStyle='#C6D0DA'; ctx.font='10.5px ui-monospace,monospace';
       ctx.textAlign='center'; ctx.fillText((t.sym||'').slice(0,8), n.x, n.y+3.5);
     }
@@ -906,11 +948,11 @@ function gDraw(W,H,R,toks){
 }
 function gStart(){ buildGraph(); if(!GRAPH.raf) GRAPH.raf=requestAnimationFrame(gStep); }
 function gNodeAt(mx,my){
-  const toks=GRAPH.nodes.map(n=>T.get(n.addr)||{});
-  const vmax=Math.max(1,...toks.map(t=>Math.max(t.vol24||0,t.liq||0)));
+  const [wx,wy]=gWorld(mx,my);
+  const {toks,R}=gRadii();
   for(let i=GRAPH.nodes.length-1;i>=0;i--){
     const n=GRAPH.nodes[i];
-    if(Math.hypot(mx-n.x,my-n.y)<=gRadius(toks[i],vmax)+2) return n;
+    if(Math.hypot(wx-n.x,wy-n.y)<=R[i]+2) return n;
   }
   return null;
 }
@@ -1254,29 +1296,76 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
   if(tab!=='graph') sort = {k: tab==='cca'?'raised':'vol24', d:-1};
   render();
 });
-$('#gcanvas').onmousemove = e => {
-  const rc = e.target.getBoundingClientRect();
-  const n = gNodeAt(e.clientX-rc.left, e.clientY-rc.top);
-  GRAPH.hover = n && n.addr;
-  e.target.style.cursor = n ? 'pointer' : 'default';
-  const tip = $('#gtip');
+function gTip(e, n){
+  const tip = $('#gtip'), rc = $('#gcanvas').getBoundingClientRect();
   if(!n){ tip.hidden = true; return; }
-  const t = T.get(n.addr) || {};
-  tip.innerHTML = `<b>${esc(t.sym||'?')}</b> <span class="dim">${esc(t.name||'')}</span><br>
-    ${dPx(t.price)} · <span class="${cls(t.ch24h)}">${dPct(t.ch24h)}</span> 24h<br>
-    <span class="dim">vol ${dUsd(t.vol24)} · liq ${dUsd(t.liq)}
-    ${t.holders?' · '+t.holders+' holders':''}</span>
-    ${t.creator?'<br><span class="dim">creator '+esc(String(t.creator).slice(0,10))+'…</span>':''}`;
+  if(n.hub){
+    tip.innerHTML = `<b>${esc(n.label)}</b><br><span class="dim">${n.n} of the top 100 trade here</span>`;
+  } else {
+    const t = T.get(n.addr) || {};
+    tip.innerHTML = `<b>${esc(t.sym||'?')}</b> <span class="dim">${esc(t.name||'')}</span><br>
+      ${dPx(t.price)} · <span class="${cls(t.ch24h)}">${dPct(t.ch24h)}</span> 24h<br>
+      <span class="dim">vol ${dUsd(t.vol24)} · liq ${dUsd(t.liq)}
+      ${t.holders?' · '+t.holders+' holders':''}</span>
+      ${t.creator?'<br><span class="dim">creator '+esc(String(t.creator).slice(0,10))+'…</span>':''}`;
+  }
   tip.hidden = false;
   const wrap = $('#graphwrap');
   tip.style.left = Math.min(e.clientX-rc.left+14, wrap.clientWidth-240)+'px';
   tip.style.top = Math.max(e.clientY-rc.top-10, 4)+'px';
-};
-$('#gcanvas').onmouseleave = () => { $('#gtip').hidden = true; GRAPH.hover = null; };
-$('#gcanvas').onclick = e => {
-  const rc = e.target.getBoundingClientRect();
+}
+const gc = $('#gcanvas');
+gc.style.touchAction = 'none';
+gc.onpointerdown = e => {
+  gc.setPointerCapture(e.pointerId);
+  const rc = gc.getBoundingClientRect();
   const n = gNodeAt(e.clientX-rc.left, e.clientY-rc.top);
-  if(n) select(n.addr);
+  if(n){ n.pin = 1; GRAPH.drag = {n, moved:0, lx:e.clientX, ly:e.clientY}; }
+  else GRAPH.pan = {lx:e.clientX, ly:e.clientY, moved:0};
+  $('#gtip').hidden = true;
+};
+gc.onpointermove = e => {
+  const rc = gc.getBoundingClientRect();
+  if(GRAPH.drag){
+    const d = GRAPH.drag, [wx,wy] = gWorld(e.clientX-rc.left, e.clientY-rc.top);
+    d.n.vx = (wx-d.n.x)*.4; d.n.vy = (wy-d.n.y)*.4;   // fling on release
+    d.n.x = wx; d.n.y = wy;
+    d.moved += Math.abs(e.clientX-d.lx)+Math.abs(e.clientY-d.ly);
+    d.lx = e.clientX; d.ly = e.clientY;
+    return;
+  }
+  if(GRAPH.pan){
+    const p = GRAPH.pan;
+    GRAPH.view.x += e.clientX-p.lx; GRAPH.view.y += e.clientY-p.ly;
+    p.moved += Math.abs(e.clientX-p.lx)+Math.abs(e.clientY-p.ly);
+    p.lx = e.clientX; p.ly = e.clientY;
+    gc.style.cursor = 'grabbing';
+    return;
+  }
+  const n = gNodeAt(e.clientX-rc.left, e.clientY-rc.top);
+  GRAPH.hover = n && n.addr;
+  gc.style.cursor = n ? 'pointer' : 'grab';
+  gTip(e, n);
+};
+gc.onpointerup = gc.onpointercancel = e => {
+  const rc = gc.getBoundingClientRect();
+  if(GRAPH.drag){
+    const d = GRAPH.drag; d.n.pin = 0;
+    if(d.moved < 5 && !d.n.hub) select(d.n.addr);     // a tap is a click
+    GRAPH.drag = null;
+  } else if(GRAPH.pan){
+    GRAPH.pan = null; gc.style.cursor = 'grab';
+  }
+};
+gc.onpointerleave = () => { if(!GRAPH.drag && !GRAPH.pan){ $('#gtip').hidden = true; GRAPH.hover = null; } };
+gc.onwheel = e => {
+  e.preventDefault();
+  const rc = gc.getBoundingClientRect(), v = GRAPH.view;
+  const mx = e.clientX-rc.left, my = e.clientY-rc.top;
+  const k2 = Math.max(.25, Math.min(4, v.k * Math.exp(-e.deltaY*.0012)));
+  v.x = mx - (mx - v.x) * k2 / v.k;
+  v.y = my - (my - v.y) * k2 / v.k;
+  v.k = k2;
 };
 $('#filters').onclick = e => {
   const c = e.target.closest('.chip'); if(!c) return;
