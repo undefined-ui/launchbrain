@@ -293,7 +293,7 @@ def ds_fill(addr):
     }
 
 
-def harvest_trades(rows, top_n=60, budget=320):
+def harvest_trades(rows, top_n=60, budget=280):
     """A rolling seven-day ledger of wallet flows. GeckoTerminal only serves
     the last ~300 trades per pool, so a single read is a day at best — but
     this runs every fifteen minutes. Each run counts only trades newer than
@@ -542,7 +542,7 @@ def run():
                 g[k] = v
         g["launchpad"] = "pools.trade"
     print("census: blockscout top tokens by holders")
-    census = harvest_census()
+    census = harvest_census(budget=150)
     # tokens the terminal already tracks, even if no listing shows them today;
     # without this check every run re-fills the same top of the unknown queue
     # and the backlog never drains
@@ -559,10 +559,10 @@ def run():
                 t["mcap"] = c["mcap"]
             continue
         prev = prev_map.get(c["addr"])
-        want_new = prev is None and filled < 120
+        want_new = prev is None and filled < 80
         # a tracked-but-invisible token goes stale otherwise; refresh the top
         # of them each run, after the never-seen ones
-        want_refresh = (prev is not None and refreshed < 60
+        want_refresh = (prev is not None and refreshed < 40
                         and now - (prev.get("last_seen") or 0) > 43200)
         if not (want_new or want_refresh):
             continue

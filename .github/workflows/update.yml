@@ -16,7 +16,7 @@ permissions:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,8 +25,8 @@ jobs:
       - name: Fetch launch data
         env:
           PYTHONUNBUFFERED: "1"
-          LB_BUDGET_S: "540"   # stop the sweep and write well before the job timeout
-                               # (the trades harvest for the trader map needs its slice)
+          LB_BUDGET_S: "420"   # every stage is time-budgeted so the whole run
+                               # fits the job timeout with room to spare
         run: python3 scripts/fetch.py
       - name: Commit if changed
         run: |
