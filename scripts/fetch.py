@@ -293,6 +293,43 @@ def ds_fill(addr):
     }
 
 
+def harvest_trades(rows, top_n=60, budget=200):
+    """Per-wallet trade aggregates for the busiest pools, so the trader map
+    on the graph tab paints instantly from the baseline instead of every
+    visitor spending four minutes reading pools themselves. Kept compact:
+    top 80 wallets per token, [buy_usd, sell_usd, buy_amt, sell_amt]."""
+    t0 = time.time()
+    picked = [t for t in sorted(rows, key=lambda t: -max(t.get("vol24") or 0,
+                                                         t.get("liq") or 0))
+              if t.get("pool")][:top_n]
+    out, calls = {}, 0
+    for t in picked:
+        if time.time() - t0 > budget:
+            break
+        doc = gt_call(f"/pools/{t['pool']}/trades")
+        calls += 1
+        per = {}
+        for r in (doc or {}).get("data") or []:
+            a = r.get("attributes") or {}
+            w = (a.get("tx_from_address") or "").lower()
+            if not w:
+                continue
+            usd, buy = num(a.get("volume_in_usd")), a.get("kind") == "buy"
+            amt = num(a.get("to_token_amount") if buy else a.get("from_token_amount"))
+            p = per.setdefault(w, [0.0, 0.0, 0.0, 0.0])
+            if buy:
+                p[0] += usd; p[2] += amt
+            else:
+                p[1] += usd; p[3] += amt
+        if per:
+            top = sorted(per.items(), key=lambda kv: -(kv[1][0] + kv[1][1]))[:80]
+            out[t["addr"]] = {w: [round(v[0], 2), round(v[1], 2), v[2], v[3]]
+                              for w, v in top}
+    print(f"  {calls} trade calls -> {len(out)} tokens with wallet flows "
+          f"in {int(time.time()-t0)}s")
+    return out
+
+
 # fields only pools.trade knows; they overlay the gecko record when both saw a token
 PT_ENRICH = ["desc", "x", "xok", "img", "emoji", "hue", "holders", "grad", "target",
              "creator", "chandle", "spam", "verdict", "flags", "badges",
@@ -518,10 +555,16 @@ def run():
             "tracked": len(rows), "seen_this_run": len(fresh), "auctions": len(auctions),
             "new_this_run": sum(1 for t in rows if t.get("first_seen") == now),
             "archived": len(arch_rows)}
+    print("harvesting trades for the trader map")
+    trades = harvest_trades(rows)
     launches_doc = {"meta": meta, "launches": rows}
     auctions_doc = {"meta": meta, "auctions": auctions}
+    traders_doc = {"meta": meta, "toks": trades}
     json.dump(launches_doc, open(lp, "w"))
     json.dump(auctions_doc, open(ap, "w"))
+    json.dump(traders_doc, open(f"{OUT}/traders.json", "w"))
+    with open(f"{OUT}/traders.js", "w") as f:
+        f.write("window.LB_TRADERS=" + json.dumps(traders_doc) + ";")
     json.dump({"meta": meta, "launches": arch_rows}, open(xp, "w"))
     # js copies: fetch() is blocked on file://, a script tag is not
     with open(f"{OUT}/launches.js", "w") as f:

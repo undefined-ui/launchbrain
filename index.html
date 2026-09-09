@@ -1112,7 +1112,33 @@ function gDraw(W,H,R,toks){
   }
   ctx.globalAlpha=1;
 }
-function gStart(){ buildGraph(); gLegend(); gProgress();
+/* the committed baseline ships wallet flows for the busiest pools, so the
+   trader map paints instantly; the live trades feed then takes over */
+let TR_SEEDED = 0;
+async function seedTrades(){
+  if(TR_SEEDED) return; TR_SEEDED = 1;
+  let doc = window.LB_TRADERS;
+  if(!doc){ try{ doc = await fetch('data/traders.json').then(r=>r.ok?r.json():null); }catch(e){} }
+  if(!doc && location.protocol === 'file:'){   // file:// blocks fetch; a script tag is fine
+    await new Promise(res=>{ const s=document.createElement('script');
+      s.src='data/traders.js'; s.onload=res; s.onerror=res; document.head.appendChild(s); });
+    doc = window.LB_TRADERS;
+  }
+  if(!doc) return;
+  const age = (doc.meta && doc.meta.fetched_at) || 1;
+  let seeded = 0;
+  for(const [a, per] of Object.entries(doc.toks || {})){
+    const t = T.get(a.toLowerCase());
+    if(!t || t._traders) continue;
+    const m = new Map();
+    for(const [w, v] of Object.entries(per))
+      m.set(w, {b:v[0], s:v[1], ba:v[2], sa:v[3], n:0});
+    t._traders = m; t._tr_at = age;   // an old stamp lets live reads replace it
+    seeded++;
+  }
+  if(seeded){ rebuildTraders(); if(tab==='graph'){ buildGraph(); gProgress(); } }
+}
+function gStart(){ seedTrades(); buildGraph(); gLegend(); gProgress();
   if(!GRAPH.raf) GRAPH.raf=requestAnimationFrame(gStep); }
 $('#gmode').onclick = e => {
   const b = e.target.closest('[data-gm]'); if(!b) return;

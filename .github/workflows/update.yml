@@ -25,7 +25,8 @@ jobs:
       - name: Fetch launch data
         env:
           PYTHONUNBUFFERED: "1"
-          LB_BUDGET_S: "660"   # stop the sweep and write well before the job timeout
+          LB_BUDGET_S: "540"   # stop the sweep and write well before the job timeout
+                               # (the trades harvest for the trader map needs its slice)
         run: python3 scripts/fetch.py
       - name: Commit if changed
         run: |
