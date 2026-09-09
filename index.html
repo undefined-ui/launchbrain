@@ -900,7 +900,7 @@ function rebuildTraders(){
       if(!tr){ tr = {w, vol:0, pnl:0, buys:0, sells:0, toks:new Map()}; TRADERS.set(w,tr); }
       const pnl = p.s - p.b + (p.ba - p.sa) * (t.price||0);
       tr.vol += p.b + p.s; tr.buys += p.b; tr.sells += p.s; tr.pnl += pnl;
-      tr.toks.set(t.addr, {usd:p.b+p.s, b:p.b, s:p.s, pnl});
+      tr.toks.set(t.addr, {usd:p.b+p.s, b:p.b, s:p.s, ba:p.ba, sa:p.sa, pnl});
     }
   }
 }
@@ -1458,6 +1458,7 @@ function kvFor(x){
   ];
 }
 function updateDetail(x){
+  if(selT) return;                       // a trader profile owns the panel
   const sEl = $('#d_spark'), kEl = $('#d_kv'), aEl = $('#d_age');
   if(!sEl) return;
   const sv = spark(x);
@@ -1472,6 +1473,7 @@ function updateDetail(x){
 }
 function select(a){
   const x = find(a); if(!x) return;
+  selT = null;
   const prev = rowMap.get(sel); sel = a;
   if(prev) prev.classList.remove('sel');
   const tr = rowMap.get(a); if(tr) tr.classList.add('sel');
@@ -1654,6 +1656,102 @@ function configAI(){
   if(sel) select(sel);
 }
 
+/* ---------- trader profile ----------
+   Click a diamond on the graph: positions and pnl from our recorded trade
+   window, live holdings from the explorer, recent fills from the pools the
+   wallet trades. Every number names its source and window. */
+let selT = null;
+function shortW(w){ return w.slice(0,6)+'…'+w.slice(-4); }
+function selectTrader(w){
+  const tr = TRADERS.get(w); if(!tr) return;
+  selT = w; sel = null;
+  $('#main').classList.add('detail');
+  const pos = [...tr.toks.entries()].map(([a,st])=>{
+    const t = T.get(a) || {};
+    const avgIn = st.b>0 && st.ba>0 ? st.b/st.ba : 0;
+    const avgOut = st.s>0 && st.sa>0 ? st.s/st.sa : 0;
+    const net = st.ba - st.sa;
+    return {a, t, st, avgIn, avgOut, net, val: net>0 ? net*(t.price||0) : 0};
+  }).sort((x,y)=>y.st.pnl-x.st.pnl);
+  const rows = pos.map(p=>`
+    <div class="tr"><span><a href="#" onclick="select('${p.a}');return false">${esc(p.t.sym||p.a.slice(0,8))}</a></span>
+      <span class="${p.st.pnl>=0?'up':'down'}">${p.st.pnl>=0?'+':''}${dUsd(Math.abs(p.st.pnl))}</span>
+      <span class="dim">${p.avgIn?'in '+dPx(p.avgIn):''}${p.avgOut?' out '+dPx(p.avgOut):''}</span>
+      <span class="dim">${p.val>1?dUsd(p.val)+' held':p.net<0?'flipped':'closed'}</span></div>`).join('');
+  $('#detail').innerHTML = `
+    <div class="dh"><h2>${shortW(w)}</h2><span class="dim">trader</span></div>
+    <div class="dsub"><a href="https://robinhoodchain.blockscout.com/address/${w}" target="_blank" rel="noopener">explorer</a>
+      · <a href="#" onclick="navigator.clipboard&&navigator.clipboard.writeText('${w}');return false">copy address</a></div>
+    <div class="kv">
+      <div><span>window pnl (est., ${TRW})</span><b class="${tr.pnl>=0?'up':'down'}">${tr.pnl>=0?'+':''}${dUsd(Math.abs(tr.pnl))}</b></div>
+      <div><span>traded volume</span><b>${dUsd(tr.vol)}</b></div>
+      <div><span>bought / sold</span><b>${dUsd(tr.buys)} / ${dUsd(tr.sells)}</b></div>
+      <div><span>tokens traded</span><b>${tr.toks.size}</b></div>
+    </div>
+    <h4>POSITIONS — recorded ${TRW} window</h4>
+    ${rows || '<div class="dim">nothing recorded</div>'}
+    <div class="dsub" style="margin-top:6px">pnl = sells − buys + remainder at current price.
+      avg entry and exit are volume-weighted over the recorded window only.</div>
+    <h4>HOLDING NOW <span class="dim" id="p_hold_src">— loading from blockscout…</span></h4>
+    <div id="p_hold"><div class="dim">…</div></div>
+    <h4>RECENT FILLS <span class="dim" id="p_fill_src">— loading from geckoterminal…</span></h4>
+    <div id="p_fills"><div class="dim">…</div></div>`;
+  loadHoldings(w);
+  loadFills(w, pos);
+}
+async function loadHoldings(w){
+  try{
+    const d = await fetch(BS+'/addresses/'+w+'/tokens?type=ERC-20',
+      {headers:{accept:'application/json'}}).then(r=>r.ok?r.json():null);
+    if(selT !== w || !$('#p_hold')) return;
+    const items = (d && d.items) || [];
+    const rows = items.map(i=>{
+      const tk = i.token||{}, a=(tk.address_hash||tk.address||'').toLowerCase();
+      const dec = +(tk.decimals||18), amt = num(i.value)/Math.pow(10,dec);
+      const t = T.get(a);
+      return {a, sym: tk.symbol||a.slice(0,8), amt, usd: t ? amt*(t.price||0) : null, known: !!t};
+    }).sort((x,y)=>(y.usd||0)-(x.usd||0)).slice(0,12);
+    $('#p_hold_src').textContent = '— blockscout, live';
+    $('#p_hold').innerHTML = rows.length ? rows.map(r=>`
+      <div class="tr"><span>${r.known?`<a href="#" onclick="select('${r.a}');return false">${esc(r.sym)}</a>`:esc(r.sym)}</span>
+        <span class="dim">${r.amt>=1?r.amt.toLocaleString('en',{maximumFractionDigits:0}):r.amt.toPrecision(3)}</span>
+        <span>${r.usd!=null?dUsd(r.usd):'<span class="dim">no price</span>'}</span></div>`).join('')
+      : '<div class="dim">no token balances</div>';
+  }catch(e){
+    if(selT===w && $('#p_hold')){ $('#p_hold_src').textContent='— blockscout unreachable';
+      $('#p_hold').innerHTML='<div class="dim">could not load</div>'; }
+  }
+}
+async function loadFills(w, pos){
+  try{
+    const tops = pos.slice(0,2).map(p=>p.t).filter(t=>t && (t.gt_pool||t.pool));
+    let fills = [];
+    for(const t of tops){
+      const d = await api(GT+'pools/'+(t.gt_pool||t.pool)+'/trades');
+      for(const r of (d.data||[])){
+        const a = r.attributes||{};
+        if((a.tx_from_address||'').toLowerCase() !== w) continue;
+        const buy = a.kind==='buy';
+        const amt = num(buy?a.to_token_amount:a.from_token_amount);
+        fills.push({sym:t.sym, buy, usd:num(a.volume_in_usd),
+          px: amt>0 ? num(a.volume_in_usd)/amt : 0, ts:a.block_timestamp});
+      }
+    }
+    if(selT !== w || !$('#p_fills')) return;
+    fills.sort((x,y)=>(y.ts||'').localeCompare(x.ts||''));
+    $('#p_fill_src').textContent = '— geckoterminal, the pools this wallet trades most';
+    $('#p_fills').innerHTML = fills.length ? fills.slice(0,12).map(f=>`
+      <div class="tr"><span class="${f.buy?'up':'down'}">${f.buy?'buy':'sell'}</span>
+        <span>${esc(f.sym||'')}</span><span>${dUsd(f.usd)}</span>
+        <span class="dim">${f.px?dPx(f.px):''}</span>
+        <span class="dim">${f.ts?ago(f.ts):''}</span></div>`).join('')
+      : '<div class="dim">nothing in the visible trade window</div>';
+  }catch(e){
+    if(selT===w && $('#p_fills')){ $('#p_fill_src').textContent='— feed busy, try reopening';
+      $('#p_fills').innerHTML='<div class="dim">could not load</div>'; }
+  }
+}
+
 function toggleWatch(a){
   WATCH.has(a) ? WATCH.delete(a) : WATCH.add(a);
   saveW(); drawCounts();
@@ -1758,7 +1856,7 @@ function gLegend(){
        diamond size: estimated pnl · only wallets with pnl over $${PNL_FLOOR} ·
        <span class="gl-r">arcs: that wallet also trades the other column — green bought more, red sold more</span> ·
        pnl is an estimate over the recorded ${TRW} trade window ·
-       click a wallet for its explorer page · drag empty space to pan · wheel zoom`
+       click a wallet to open its profile · drag empty space to pan · wheel zoom`
     : `size: volume &amp; depth · colour: 24h move · hollow nodes: venues ·
        lines: <span class="gl-c">same creator</span> ·
        <span class="gl-t">shared recent traders</span> ·
@@ -1840,7 +1938,7 @@ gc.onpointerup = gc.onpointercancel = e => {
   if(GRAPH.drag){
     const d = GRAPH.drag; d.n.pin = 0;
     if(d.moved < 5){                                   // a tap is a click
-      if(d.n.trader) window.open('https://robinhoodchain.blockscout.com/address/'+d.n.w, '_blank');
+      if(d.n.trader) selectTrader(d.n.w);
       else if(!d.n.hub) select(d.n.addr);
     }
     GRAPH.drag = null;
