@@ -294,39 +294,77 @@ def ds_fill(addr):
 
 
 def harvest_trades(rows, top_n=60, budget=320):
-    """Per-wallet trade aggregates for the busiest pools, so the trader map
-    on the graph tab paints instantly from the baseline instead of every
-    visitor spending four minutes reading pools themselves. Kept compact:
-    top 80 wallets per token, [buy_usd, sell_usd, buy_amt, sell_amt]."""
+    """A rolling seven-day ledger of wallet flows. GeckoTerminal only serves
+    the last ~300 trades per pool, so a single read is a day at best — but
+    this runs every fifteen minutes. Each run counts only trades newer than
+    the pool's watermark (no double counting), buckets them by day, keeps
+    seven days, and hands the page a compact aggregate: top 150 wallets per
+    token, [buy_usd, sell_usd, buy_amt, sell_amt]. Accumulated history is
+    the one thing a competitor with the same APIs cannot copy."""
+    lg_path = f"{OUT}/traders_ledger.json"
+    try:
+        ledger = json.load(open(lg_path))
+    except Exception:
+        ledger = {}
+    wm = ledger.setdefault("watermarks", {})
+    days = ledger.setdefault("days", {})
     t0 = time.time()
     picked = [t for t in sorted(rows, key=lambda t: -max(t.get("vol24") or 0,
                                                          t.get("liq") or 0))
               if t.get("pool")][:top_n]
-    out, calls = {}, 0
+    calls = fresh_trades = 0
     for t in picked:
         if time.time() - t0 > budget:
             break
-        doc = gt_call(f"/pools/{t['pool']}/trades")
+        pool = t["pool"]
+        doc = gt_call(f"/pools/{pool}/trades")
         calls += 1
-        per = {}
+        last = wm.get(pool, "")
+        newest = last
         for r in (doc or {}).get("data") or []:
             a = r.get("attributes") or {}
+            ts = a.get("block_timestamp") or ""
+            if not ts or ts <= last:           # ISO strings compare in order
+                continue
+            if ts > newest:
+                newest = ts
             w = (a.get("tx_from_address") or "").lower()
             if not w:
                 continue
             usd, buy = num(a.get("volume_in_usd")), a.get("kind") == "buy"
             amt = num(a.get("to_token_amount") if buy else a.get("from_token_amount"))
-            p = per.setdefault(w, [0.0, 0.0, 0.0, 0.0])
+            p = days.setdefault(ts[:10], {}).setdefault(t["addr"], {}) \
+                    .setdefault(w, [0.0, 0.0, 0.0, 0.0])
             if buy:
                 p[0] += usd; p[2] += amt
             else:
                 p[1] += usd; p[3] += amt
-        if per:
-            top = sorted(per.items(), key=lambda kv: -(kv[1][0] + kv[1][1]))[:80]
-            out[t["addr"]] = {w: [round(v[0], 2), round(v[1], 2), v[2], v[3]]
-                              for w, v in top}
-    print(f"  {calls} trade calls -> {len(out)} tokens with wallet flows "
-          f"in {int(time.time()-t0)}s")
+            fresh_trades += 1
+        if newest:
+            wm[pool] = newest
+    for d in sorted(days)[:-7]:                # keep a rolling week
+        days.pop(d, None)
+    for toksd in days.values():                # cap ledger growth per token/day
+        for ta, per in list(toksd.items()):
+            if len(per) > 200:
+                toksd[ta] = dict(sorted(per.items(),
+                    key=lambda kv: -(kv[1][0] + kv[1][1]))[:200])
+    json.dump(ledger, open(lg_path, "w"))
+    agg = {}
+    for toksd in days.values():
+        for ta, per in toksd.items():
+            tp = agg.setdefault(ta, {})
+            for w, v in per.items():
+                p = tp.setdefault(w, [0.0, 0.0, 0.0, 0.0])
+                for i in range(4):
+                    p[i] += v[i]
+    out = {}
+    for ta, per in agg.items():
+        top = sorted(per.items(), key=lambda kv: -(kv[1][0] + kv[1][1]))[:150]
+        out[ta] = {w: [round(v[0], 2), round(v[1], 2), v[2], v[3]]
+                   for w, v in top}
+    print(f"  {calls} trade calls, {fresh_trades} new trades, "
+          f"{len(days)} day buckets -> {len(out)} tokens in {int(time.time()-t0)}s")
     return out
 
 
@@ -559,7 +597,7 @@ def run():
     trades = harvest_trades(rows)
     launches_doc = {"meta": meta, "launches": rows}
     auctions_doc = {"meta": meta, "auctions": auctions}
-    traders_doc = {"meta": meta, "toks": trades}
+    traders_doc = {"meta": dict(meta, trades_window="7d"), "toks": trades}
     json.dump(launches_doc, open(lp, "w"))
     json.dump(auctions_doc, open(ap, "w"))
     json.dump(traders_doc, open(f"{OUT}/traders.json", "w"))

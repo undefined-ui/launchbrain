@@ -892,8 +892,10 @@ async function tradesStep(){
 function rebuildTraders(){
   TRADERS.clear();
   for(const t of topTokens(TR_TOKENS)){
-    if(!t._traders) continue;
-    for(const [w,p] of t._traders){
+    // the accumulated weekly ledger beats the live last-300-trades window
+    const src = t._traders7 || t._traders;
+    if(!src) continue;
+    for(const [w,p] of src){
       let tr = TRADERS.get(w);
       if(!tr){ tr = {w, vol:0, pnl:0, buys:0, sells:0, toks:new Map()}; TRADERS.set(w,tr); }
       const pnl = p.s - p.b + (p.ba - p.sa) * (t.price||0);
@@ -1063,9 +1065,10 @@ function buildGraph(){
    the top. Nodes glide to their slots instead of simulating physics. */
 function buildColumns(W,H){
   const old=new Map(GRAPH.nodes.map(n=>[n.addr,n]));
-  const toks=topTokens(TR_TOKENS).filter(t=>t._traders && t._traders.size);
+  const toks=topTokens(TR_TOKENS)
+    .filter(t=>(t._traders7&&t._traders7.size)||(t._traders&&t._traders.size));
   const tokSet=new Set(toks.map(t=>t.addr));
-  const ws=[...TRADERS.values()].filter(t=>t.pnl>0)
+  const ws=[...TRADERS.values()].filter(t=>t.pnl>PNL_FLOOR)
     .sort((a,b)=>b.pnl-a.pnl).slice(0,300);
   // a wallet lives in the column of its biggest position
   const homes=new Map();
@@ -1325,7 +1328,8 @@ function gDraw(W,H,R,toks){
 }
 /* the committed baseline ships wallet flows for the busiest pools, so the
    trader map paints instantly; the live trades feed then takes over */
-let TR_SEEDED = 0;
+let TR_SEEDED = 0, TRW = '24h';
+const PNL_FLOOR = 100;   // the map shows wallets that actually made money
 async function seedTrades(){
   if(TR_SEEDED) return; TR_SEEDED = 1;
   let doc = window.LB_TRADERS;
@@ -1336,15 +1340,15 @@ async function seedTrades(){
     doc = window.LB_TRADERS;
   }
   if(!doc) return;
-  const age = (doc.meta && doc.meta.fetched_at) || 1;
+  TRW = (doc.meta && doc.meta.trades_window) || '24h';
   let seeded = 0;
   for(const [a, per] of Object.entries(doc.toks || {})){
     const t = T.get(a.toLowerCase());
-    if(!t || t._traders) continue;
+    if(!t) continue;
     const m = new Map();
     for(const [w, v] of Object.entries(per))
       m.set(w, {b:v[0], s:v[1], ba:v[2], sa:v[3], n:0});
-    t._traders = m; t._tr_at = age;   // an old stamp lets live reads replace it
+    t._traders7 = m;      // the weekly ledger; live reads stay a separate window
     seeded++;
   }
   if(seeded){ rebuildTraders(); if(tab==='graph'){ buildGraph(); gProgress(); } }
@@ -1751,9 +1755,9 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
 function gLegend(){
   $('#glegend').innerHTML = GRAPH.mode==='traders'
     ? `columns: a token and its most profitable wallets, best on top ·
-       diamond size: estimated pnl · losing wallets hidden ·
+       diamond size: estimated pnl · only wallets with pnl over $${PNL_FLOOR} ·
        <span class="gl-r">arcs: that wallet also trades the other column — green bought more, red sold more</span> ·
-       pnl is an estimate over the visible 24h trades only ·
+       pnl is an estimate over the recorded ${TRW} trade window ·
        click a wallet for its explorer page · drag empty space to pan · wheel zoom`
     : `size: volume &amp; depth · colour: 24h move · hollow nodes: venues ·
        lines: <span class="gl-c">same creator</span> ·
@@ -1768,7 +1772,7 @@ function gProgress(){
   const shown = GRAPH.nodes.filter(n=>n.trader).length;
   $('#gprog').textContent =
     (done<toks.length ? `reading trades ${done}/${toks.length} pools · ` : '')
-    + `${TRADERS.size} wallets seen · top ${shown} by pnl on the map`;
+    + `${TRADERS.size} wallets seen · ${shown} with pnl > $${PNL_FLOOR} shown · ${TRW} window`;
 }
 function gTip(e, n){
   const tip = $('#gtip'), rc = $('#gcanvas').getBoundingClientRect();
@@ -1782,7 +1786,7 @@ function gTip(e, n){
       .join('<br>');
     tip.innerHTML = `<b>${esc(n.w.slice(0,10))}…</b><br>
       <span class="dim">24h vol ${dUsd(tr.vol)} · bought ${dUsd(tr.buys)} · sold ${dUsd(tr.sells)}</span><br>
-      window pnl <span class="${tr.pnl>=0?'up':'down'}">${tr.pnl>=0?'+':''}${dUsd(Math.abs(tr.pnl))}</span> <span class="dim">(est., 24h trades only)</span><br>${top}`;
+      window pnl <span class="${tr.pnl>=0?'up':'down'}">${tr.pnl>=0?'+':''}${dUsd(Math.abs(tr.pnl))}</span> <span class="dim">(est., ${TRW} window)</span><br>${top}`;
   } else if(n.hub){
     tip.innerHTML = `<b>${esc(n.label)}</b><br><span class="dim">${n.n} of the top 100 trade here</span>`;
   } else {
