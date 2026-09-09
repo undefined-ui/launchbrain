@@ -1288,7 +1288,8 @@ function select(a){
 // the relay is a tiny Cloudflare Worker (worker/chat.js) holding the site's
 // Groq key server-side, so chat works for every visitor with zero setup.
 // Empty URL = not deployed yet; the provider list adapts.
-const AI_RELAY_URL = 'https://launchbrain.rudenko1909-lt.workers.dev';
+// /chat is not an asset path, so it always falls through to the relay script
+const AI_RELAY_URL = 'https://launchbrain.org/chat';
 const AI_PROVIDERS = {
   ...(AI_RELAY_URL ? {relay: {url: AI_RELAY_URL, model:'', needsKey:false}} : {}),
   // bare: the anonymous tier rejects system role and sampling params
