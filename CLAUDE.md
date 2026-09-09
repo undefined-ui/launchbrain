@@ -203,13 +203,16 @@ tells anyone to buy.
 the page says so instead of showing stale numbers as if they were live.
 
 **Style.** Dense monospace terminal, dark — but alive, not austere (the owner
-asked for this after "looks a bit primitive" feedback, September 2026):
-electric-green accent with cyan as secondary, soft glows, micro-transitions,
-token logos in the table, rounded corners in moderation. JetBrains Mono for
-data, Space Grotesk for the brand — Google Fonts with system fallbacks, the
-one allowed runtime dependency. Still: no emoji, honest numbers, lowercase
-labels, British-ish plain English. Colours are CSS variables at the top of
-`index.html`.
+asked for this after "looks a bit primitive" feedback, September 2026). The
+system: editorial serif (Instrument Serif) for the wordmark and tagline
+against JetBrains Mono for data, Space Grotesk for big numerals; ONE acid
+accent — lime `--lime` — reserved for interface (active states, CTAs, the
+live dot), while green/red stay strictly semantic for data; dotted background
+texture, soft glows, micro-transitions, token logos in the table, a stat band
+with big numerals under the header, a UTC clock. Google Fonts with system
+fallbacks is the one allowed runtime dependency. Still: no emoji, honest
+numbers, lowercase labels, British-ish plain English. Colours are CSS
+variables at the top of `index.html`.
 
 **Keyboard shortcuts must never fire while the user is typing.** This broke once
 already: pressing `e` in the chat downloaded a file.

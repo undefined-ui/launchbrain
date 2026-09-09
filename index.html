@@ -14,19 +14,21 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230D1117'/%3E%3Cpath d='M5 20 L11 20 L14 10 L18 24 L21 16 L27 16' stroke='%232CE08B' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@500;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
 <style>
 :root{
   --bg:#07090D; --panel:#0D1117; --panel2:#131922; --line:#1D2530;
   --tx:#D7E0EA; --dim:#8593A3; --faint:#57626F;
   --up:#2CE08B; --down:#FF6B62; --warn:#F0B94A; --acc:#2CE08B; --acc2:#5AC8E0;
   --upbg:rgba(44,224,139,.1); --downbg:rgba(255,107,98,.1);
+  --lime:#D8F74B; --limebg:rgba(216,247,75,.1); --limebrd:rgba(216,247,75,.4);
 }
 *{margin:0;padding:0;box-sizing:border-box}
 body{color:var(--tx);
   background:
-    radial-gradient(1100px 520px at 82% -12%, rgba(44,224,139,.07), transparent 62%),
-    radial-gradient(900px 480px at -8% 112%, rgba(90,200,224,.05), transparent 60%),
+    radial-gradient(rgba(255,255,255,.028) 1px, transparent 1.3px) 0 0/22px 22px,
+    radial-gradient(1100px 520px at 82% -12%, rgba(216,247,75,.05), transparent 62%),
+    radial-gradient(900px 480px at -8% 112%, rgba(90,200,224,.04), transparent 60%),
     var(--bg);
   font:13px/1.45 "JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
   height:100vh;display:flex;flex-direction:column;overflow:hidden}
@@ -39,18 +41,29 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 
 header{border-bottom:1px solid var(--line);background:var(--panel);flex:0 0 auto}
 .top{display:flex;align-items:center;gap:16px;padding:10px 14px}
-.brand{font-family:"Space Grotesk",sans-serif;font-weight:700;letter-spacing:-.02em;
-  font-size:16.5px}
-.brand i{font-style:normal;
-  background:linear-gradient(90deg,var(--acc),var(--acc2));
-  -webkit-background-clip:text;background-clip:text;color:transparent}
+.brand{font-family:"Instrument Serif",Georgia,serif;font-weight:400;
+  letter-spacing:.01em;font-size:22px;line-height:1}
+.brand i{font-style:italic;color:var(--lime)}
+.tagline{font-family:"Instrument Serif",Georgia,serif;font-style:italic;
+  color:var(--dim);font-size:14.5px;letter-spacing:.01em}
+#clock{color:var(--faint);font-size:11.5px;font-variant-numeric:tabular-nums;
+  white-space:nowrap}
+@media(max-width:1100px){.tagline{display:none}}
 .meta{color:var(--faint);font-size:11.5px}
 .meta b{color:var(--dim);font-weight:400}
 .grow{flex:1}
 @keyframes lbpulse{0%{box-shadow:0 0 0 0 rgba(44,224,139,.45)}
   70%{box-shadow:0 0 0 7px rgba(44,224,139,0)}100%{box-shadow:0 0 0 0 rgba(44,224,139,0)}}
-.dot{width:7px;height:7px;border-radius:50%;background:var(--up);display:inline-block;
+.dot{width:7px;height:7px;border-radius:50%;background:var(--lime);display:inline-block;
   margin-right:6px;vertical-align:middle;animation:lbpulse 2.2s infinite}
+#stats{display:flex;border-top:1px solid var(--line);background:rgba(13,17,23,.6)}
+#stats>div{flex:1;padding:9px 14px;border-right:1px solid var(--line)}
+#stats>div:last-child{border-right:0}
+#stats span{display:block;color:var(--faint);font-size:10.5px;letter-spacing:.05em}
+#stats b{font-family:"Space Grotesk",sans-serif;font-weight:700;font-size:21px;
+  letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+#stats b i{font-style:normal;color:var(--lime);font-size:13px;font-weight:500}
+@media(max-width:700px){#stats{display:none}}
 input[type=search]{background:var(--panel2);border:1px solid var(--line);border-radius:9px;
   color:var(--tx);padding:6px 11px;width:200px;font:inherit;transition:border-color .15s}
 input[type=search]:focus{outline:none;border-color:rgba(44,224,139,.45)}
@@ -67,8 +80,8 @@ input[type=search]::placeholder{color:var(--faint)}
 .tabs button{padding:8px 14px;color:var(--dim);border-bottom:2px solid transparent;
   font-size:12.5px;transition:color .15s,border-color .15s}
 .tabs button:hover{color:var(--tx)}
-.tabs button.on{color:var(--tx);border-bottom-color:var(--acc);
-  text-shadow:0 0 18px rgba(44,224,139,.35)}
+.tabs button.on{color:var(--tx);border-bottom-color:var(--lime);
+  text-shadow:0 0 18px rgba(216,247,75,.3)}
 .tabs button b{color:var(--faint);font-weight:400;margin-left:6px;font-size:11px}
 
 .filters{display:flex;gap:6px;padding:8px 14px;border-top:1px solid var(--line);
@@ -76,7 +89,7 @@ input[type=search]::placeholder{color:var(--faint)}
 .chip{border:1px solid var(--line);border-radius:99px;padding:3px 11px;color:var(--dim);
   font-size:11.5px;transition:border-color .15s,color .15s,background .15s}
 .chip:hover{color:var(--tx);border-color:#2E3A48}
-.chip.on{background:var(--upbg);border-color:rgba(44,224,139,.4);color:var(--up)}
+.chip.on{background:var(--limebg);border-color:var(--limebrd);color:var(--lime)}
 #pend{display:none;border-color:#4A4327;color:var(--warn)}
 
 main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 356px;min-height:0}
@@ -158,9 +171,11 @@ h4{font-size:10.5px;color:var(--faint);letter-spacing:.09em;margin:14px 0 6px;fo
 .acts button{border:1px solid var(--line);border-radius:9px;padding:6px 12px;color:var(--dim);
   transition:border-color .15s,color .15s,box-shadow .15s}
 .acts button:hover{color:var(--tx);border-color:#2E3A47}
-.acts button.pri,.acts .abtn.pri{background:var(--upbg);border-color:rgba(44,224,139,.4);color:var(--up)}
-.acts button.pri:hover,.acts .abtn.pri:hover{box-shadow:0 0 14px rgba(44,224,139,.18);text-decoration:none}
+.acts button.pri{background:var(--limebg);border-color:var(--limebrd);color:var(--lime)}
+.acts button.pri:hover{box-shadow:0 0 14px rgba(216,247,75,.18)}
 .acts .abtn{display:inline-block;border:1px solid var(--line);border-radius:9px;padding:6px 12px}
+.acts .abtn.pri{background:var(--lime);border-color:var(--lime);color:#10130A;font-weight:700}
+.acts .abtn.pri:hover{box-shadow:0 0 18px rgba(216,247,75,.35);text-decoration:none}
 textarea{width:100%;min-height:92px;background:var(--panel2);border:1px solid var(--line);
   border-radius:10px;color:var(--tx);padding:9px;font:inherit;resize:vertical;
   transition:border-color .15s}
@@ -176,9 +191,9 @@ textarea:focus{outline:none;border-color:rgba(44,224,139,.4)}
   color:var(--tx);padding:6px 11px;font:inherit;min-width:0;transition:border-color .15s}
 #chatf input:focus{outline:none;border-color:rgba(44,224,139,.45)}
 #chatf input::placeholder{color:var(--faint)}
-#chatf button{border:1px solid rgba(44,224,139,.4);border-radius:9px;padding:6px 12px;
-  color:var(--up);background:var(--upbg);transition:box-shadow .15s}
-#chatf button:hover{box-shadow:0 0 14px rgba(44,224,139,.18)}
+#chatf button{border:1px solid var(--limebrd);border-radius:9px;padding:6px 12px;
+  color:var(--lime);background:var(--limebg);transition:box-shadow .15s}
+#chatf button:hover{box-shadow:0 0 14px rgba(216,247,75,.18)}
 .empty{color:var(--faint);padding:40px 14px;text-align:center}
 #list[hidden],#graphwrap[hidden]{display:none}
 #graphwrap{position:relative;overflow:hidden;min-height:0;background:var(--bg)}
@@ -214,8 +229,10 @@ kbd{border:1px solid var(--line);border-radius:3px;padding:0 4px;color:var(--dim
 <header>
   <div class="top">
     <div class="brand">launch<i>brain</i></div>
+    <div class="tagline">every launch on Robinhood Chain, filed into your second brain</div>
     <div class="meta"><span class="dot"></span><b id="cnt">loading</b></div>
     <div class="grow"></div>
+    <span id="clock"></span>
     <div class="meta" id="src"></div>
     <input type="search" id="q" placeholder="filter symbol, name, creator" autocomplete="off">
   </div>
@@ -224,6 +241,13 @@ kbd{border:1px solid var(--line);border-radius:3px;padding:0 4px;color:var(--dim
     <button data-tab="cca">Auctions<b id="t2"></b></button>
     <button data-tab="watch">Watchlist<b id="t3"></b></button>
     <button data-tab="graph">Graph<b id="t4"></b></button>
+  </div>
+  <div id="stats">
+    <div><span>tokens tracked</span><b id="s_tracked">—</b></div>
+    <div><span>arrived this session</span><b id="s_live">—</b></div>
+    <div><span>auctions live</span><b id="s_auc">—</b></div>
+    <div><span>wallets indexed</span><b id="s_wal">—</b></div>
+    <div><span>baseline age</span><b id="s_age">—</b></div>
   </div>
   <div class="filters" id="filters">
     <button class="chip on" data-f="nospam">hide spam</button>
@@ -652,7 +676,13 @@ function drawCounts(){
   $('#cnt').textContent = `${T.size} tracked · +${NEWSEEN.size} live · ${CCA.length} auctions`;
   $('#t1').textContent = T.size; $('#t2').textContent = CCA.length;
   $('#t3').textContent = WATCH.size;
+  $('#s_tracked').textContent = T.size.toLocaleString('en');
+  $('#s_live').innerHTML = NEWSEEN.size ? `+${NEWSEEN.size} <i>live</i>` : '0';
+  $('#s_auc').textContent = CCA.length;
+  $('#s_wal').textContent = TRADERS.size ? TRADERS.size.toLocaleString('en') : '—';
+  if(META) $('#s_age').textContent = agoU(META.fetched_at);
 }
+setInterval(()=>{ $('#clock').textContent = new Date().toISOString().slice(11,19)+' UTC'; }, 1000);
 
 /* ---------- rows + filters ---------- */
 function curveRows(){ return [...T.values()]; }
@@ -1421,7 +1451,8 @@ function sparkSeries(x){
 }
 function chartLabel(x){
   if('clearing' in x) return x.series&&x.series.length>1 ? 'chart: pools.trade snapshot' : 'no chart data';
-  if(x._ohlcv && x._ohlcv.length>1) return 'chart: last '+x._ohlcv.length+'h hourly · geckoterminal';
+  if(x._ohlcv && x._ohlcv.length>1)
+    return 'chart: hourly closes since '+(x._ohlcvT?agoU(x._ohlcvT[0])+' ago':'')+' · geckoterminal';
   if(x.series && x.series.length>1) return 'chart: price series · pools.trade snapshot';
   if((x.hist||[]).length>1) return 'chart: local snapshots · one per 5 min';
   return x._chart_err ? 'no chart data on any feed for this pool' : 'chart loading from geckoterminal…';
