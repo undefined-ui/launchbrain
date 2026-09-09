@@ -209,14 +209,17 @@ CENSUS_SORT = "?type=ERC-20&sort=holders_count&order=desc"
 
 
 def census_qs(np):
-    """next_page_params back into a query string. Python would serialise its
-    booleans as True/False, which silently breaks blockscout's cursor and
-    every page comes back as page one."""
+    """next_page_params back into a query string, the way a browser would.
+    Blockscout's cursor needs every key: null values must be the literal
+    string "null" (dropping them silently serves page one again), and
+    booleans must be lowercase, not Python's True/False."""
     clean = {}
     for k, v in (np or {}).items():
         if v is None:
-            continue
-        clean[k] = ("true" if v else "false") if isinstance(v, bool) else v
+            v = "null"
+        elif isinstance(v, bool):
+            v = "true" if v else "false"
+        clean[k] = v
     return urllib.parse.urlencode(clean)
 
 
