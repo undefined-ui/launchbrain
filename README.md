@@ -3,7 +3,8 @@
 A terminal for tracking new token launches on Robinhood Chain, that files what
 you find into your second brain.
 
-**Live: [undefined-ui.github.io/launchbrain](https://undefined-ui.github.io/launchbrain/)**
+**Live: [launchbrain.org](https://launchbrain.org/)**
+(mirror: [undefined-ui.github.io/launchbrain](https://undefined-ui.github.io/launchbrain/))
 
 Every launchpad has a feed. What none of them have is a way to keep what you
 learned. You spot something at 2am, you tell yourself you will remember, and a

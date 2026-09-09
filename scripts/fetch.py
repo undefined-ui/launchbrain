@@ -24,7 +24,7 @@ BS = "https://robinhoodchain.blockscout.com/api/v2"
 DS = "https://api.dexscreener.com"
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "..", "data")
-UA = {"User-Agent": "launchbrain/1.0 (+https://github.com/undefined-ui/launchbrain)"}
+UA = {"User-Agent": "launchbrain/1.0 (+https://launchbrain.org)"}
 
 SWEEP = list("abcdefghijklmnopqrstuvwxyz0123456789")
 GT_PAGE_CAP = 10           # the free tier answers 401 beyond page 10, everywhere
@@ -196,7 +196,7 @@ def bs_call(path):
     try:
         req = urllib.request.Request(BS + path, headers={
             "User-Agent": "Mozilla/5.0 (compatible; launchbrain/1.0; "
-                          "+https://github.com/undefined-ui/launchbrain)",
+                          "+https://launchbrain.org)",
             "Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=45) as r:
             return json.load(r)
