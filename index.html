@@ -949,12 +949,8 @@ function buildGraph(){
     for(const n of GRAPH.nodes){ n.x*=sx; n.y*=sy; }
   }
   GRAPH.W=W; GRAPH.H=H;
-  // traders mode maps only tokens whose trades are read: the picture grows
-  // as pools stream in and always fills the canvas, instead of a ring of
-  // inert bubbles crowding the working part into a corner
-  const toks = GRAPH.mode==='traders'
-    ? topTokens(TR_TOKENS).filter(t=>t._traders && t._traders.size)
-    : topTokens(100);
+  if(GRAPH.mode==='traders'){ buildColumns(W,H); return; }
+  const toks = topTokens(100);
   const old=new Map(GRAPH.nodes.map(n=>[n.addr,n]));
   GRAPH.nodes=toks.map(t=>old.get(t.addr)||{
     addr:t.addr,
@@ -1062,6 +1058,63 @@ function buildGraph(){
   for(const e of edges){ GRAPH.deg[e.a]++; GRAPH.deg[e.b]++; }
   if($('#t4')) $('#t4').textContent=GRAPH.nodes.length;
 }
+/* traders mode is a ledger, not a cloud: one column per token, its most
+   profitable wallets stacked underneath, cross-holdings drawn as arcs over
+   the top. Nodes glide to their slots instead of simulating physics. */
+function buildColumns(W,H){
+  const old=new Map(GRAPH.nodes.map(n=>[n.addr,n]));
+  const toks=topTokens(TR_TOKENS).filter(t=>t._traders && t._traders.size);
+  const tokSet=new Set(toks.map(t=>t.addr));
+  const ws=[...TRADERS.values()].filter(t=>t.pnl>0)
+    .sort((a,b)=>b.pnl-a.pnl).slice(0,300);
+  // a wallet lives in the column of its biggest position
+  const homes=new Map();
+  for(const tr of ws){
+    let best=null, bu=0;
+    for(const [ta,st] of tr.toks) if(st.usd>bu && tokSet.has(ta)){ bu=st.usd; best=ta; }
+    if(!best) continue;
+    if(!homes.has(best)) homes.set(best,[]);
+    homes.get(best).push(tr);
+  }
+  const cols=toks.map(t=>({t, ws:(homes.get(t.addr)||[])}))
+    .filter(c=>c.ws.length)
+    .sort((a,b)=>b.ws.reduce((s,w)=>s+w.pnl,0)-a.ws.reduce((s,w)=>s+w.pnl,0));
+  const colW=150, x0=110, tokY=70, wy0=138, step=34, cap=14;
+  GRAPH.nodes=[]; GRAPH.edges=[]; GRAPH.more=[];
+  const idx=new Map(), home=new Map();
+  cols.forEach((c,ci)=>{
+    const x=x0+ci*colW;
+    const tn=old.get(c.t.addr)||{addr:c.t.addr, x, y:tokY, vx:0, vy:0};
+    tn.tx=x; tn.ty=tokY; tn.trader=0; tn.hub=0;
+    idx.set(c.t.addr, GRAPH.nodes.push(tn)-1);
+    c.ws.slice(0,cap).forEach((tr,wi)=>{
+      const a='tr:'+tr.w;
+      const n=old.get(a)||{addr:a, x, y:wy0+wi*step, vx:0, vy:0};
+      n.trader=1; n.w=tr.w; n.tx=x; n.ty=wy0+wi*step;
+      idx.set(a, GRAPH.nodes.push(n)-1);
+      home.set(a, c.t.addr);
+    });
+    if(c.ws.length>cap) GRAPH.more.push({x, y:wy0+cap*step, n:c.ws.length-cap});
+  });
+  const tflow=new Map(), cross=[];
+  for(const n of GRAPH.nodes){
+    if(!n.trader) continue;
+    const tr=TRADERS.get(n.w); if(!tr) continue;
+    [...tr.toks.entries()].filter(([ta,st])=>idx.has(ta)&&st.usd>=5)
+      .sort((x,y)=>y[1].usd-x[1].usd).slice(0,4)
+      .forEach(([ta,st])=>{
+        const e={a:idx.get(n.addr), b:idx.get(ta), k:'flow', w:st.usd,
+                 dir:st.b>=st.s?1:-1, prim:home.get(n.addr)===ta};
+        tflow.set(ta,(tflow.get(ta)||0)+st.usd);
+        if(e.prim) GRAPH.edges.push(e); else cross.push(e);
+      });
+  }
+  cross.sort((a,b)=>b.w-a.w).slice(0,250).forEach(e=>GRAPH.edges.push(e));
+  GRAPH.tflow=tflow; GRAPH.tfmax=Math.max(1,...tflow.values());
+  GRAPH.deg=GRAPH.nodes.map(()=>0);
+  for(const e of GRAPH.edges){ GRAPH.deg[e.a]++; GRAPH.deg[e.b]++; }
+  if($('#t4')) $('#t4').textContent=GRAPH.nodes.length;
+}
 function gRadius(t,vmax){
   return 6+22*Math.sqrt(Math.max(t.vol24||0,t.liq||0)/(vmax||1));
 }
@@ -1081,6 +1134,15 @@ function gStep(){
   if(GRAPH.frame%120===0) gProgress();
   const c=$('#gcanvas'), W=c.width/gDPR, H=c.height/gDPR;
   const N=GRAPH.nodes, {toks,R}=gRadii();
+  if(GRAPH.mode==='traders'){                       // columns: glide to slots
+    for(const n of N){
+      if(n.pin) continue;
+      if(n.tx!=null){ n.x+=(n.tx-n.x)*.14; n.y+=(n.ty-n.y)*.14; }
+    }
+    gDraw(W,H,R,toks);
+    GRAPH.raf=requestAnimationFrame(gStep);
+    return;
+  }
   const deg=GRAPH.deg||[];
   for(let i=0;i<N.length;i++)for(let j=i+1;j<N.length;j++){
     const a=N[i],b=N[j]; let dx=b.x-a.x, dy=b.y-a.y;
@@ -1177,10 +1239,15 @@ function gDraw(W,H,R,toks){
       : e.k==='venue'?.5 : e.k==='corr'?.35 : e.k==='flow'?.42 : .55;
     ctx.lineWidth = (e.k==='trader'?Math.min(1+e.w*.5,3)
       : e.k==='flow'?Math.min(.8+Math.log10(1+e.w)*.6,3.4) : 1)/v.k;
-    const mx=(a.x+b.x)/2, my=(a.y+b.y)/2;
-    const dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy)||1;
     ctx.beginPath(); ctx.moveTo(a.x,a.y);
-    ctx.quadraticCurveTo(mx-dy/d*d*.08, my+dx/d*d*.08, b.x, b.y);
+    if(e.prim){                       // a wallet's own column: quiet vertical
+      if(!focus) ctx.globalAlpha=.14;
+      ctx.lineTo(b.x,b.y);
+    } else {
+      const mx=(a.x+b.x)/2, my=(a.y+b.y)/2;
+      const dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy)||1;
+      ctx.quadraticCurveTo(mx-dy/d*d*.08, my+dx/d*d*.08, b.x, b.y);
+    }
     ctx.stroke();
   }
   ctx.globalAlpha=1;
@@ -1250,6 +1317,11 @@ function gDraw(W,H,R,toks){
     }
   }
   ctx.globalAlpha=1;
+  if(GRAPH.mode==='traders'){
+    ctx.fillStyle='#57626F'; ctx.font='9.5px ui-monospace,monospace';
+    ctx.textAlign='center';
+    for(const m of GRAPH.more||[]) ctx.fillText('+'+m.n+' more', m.x, m.y+6);
+  }
 }
 /* the committed baseline ships wallet flows for the busiest pools, so the
    trader map paints instantly; the live trades feed then takes over */
@@ -1284,6 +1356,7 @@ $('#gmode').onclick = e => {
   GRAPH.mode = b.dataset.gm;
   document.querySelectorAll('#gmode [data-gm]').forEach(x=>x.classList.toggle('on', x===b));
   GRAPH.nodes = []; GRAPH.edges = [];        // fresh layout per mode
+  GRAPH.view = {x:0, y:0, k:1};
   buildGraph(); gLegend(); gProgress();
 };
 function gNodeAt(mx,my){
@@ -1677,11 +1750,11 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
 });
 function gLegend(){
   $('#glegend').innerHTML = GRAPH.mode==='traders'
-    ? `diamonds: the day's most profitable wallets · size: estimated pnl ·
-       losing wallets are hidden ·
-       <span class="gl-r">lines: wallet traded that token, green bought more, red sold more</span> ·
+    ? `columns: a token and its most profitable wallets, best on top ·
+       diamond size: estimated pnl · losing wallets hidden ·
+       <span class="gl-r">arcs: that wallet also trades the other column — green bought more, red sold more</span> ·
        pnl is an estimate over the visible 24h trades only ·
-       click a wallet for its explorer page · drag · pan · wheel zoom`
+       click a wallet for its explorer page · drag empty space to pan · wheel zoom`
     : `size: volume &amp; depth · colour: 24h move · hollow nodes: venues ·
        lines: <span class="gl-c">same creator</span> ·
        <span class="gl-t">shared recent traders</span> ·
