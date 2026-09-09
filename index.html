@@ -37,8 +37,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 ::-webkit-scrollbar-thumb{background:#242E3A;border-radius:8px}
 ::-webkit-scrollbar-thumb:hover{background:#2E3A48}
 
-header{border-bottom:1px solid var(--line);background:rgba(13,17,23,.92);
-  backdrop-filter:blur(6px);flex:0 0 auto}
+header{border-bottom:1px solid var(--line);background:var(--panel);flex:0 0 auto}
 .top{display:flex;align-items:center;gap:16px;padding:10px 14px}
 .brand{font-family:"Space Grotesk",sans-serif;font-weight:700;letter-spacing:-.02em;
   font-size:16.5px}
@@ -371,7 +370,13 @@ function saveDelta(){
   }
   try{ localStorage.setItem(DKEY, s); TOUCHED.clear(); }catch(e){ /* quota; keep going, memory still works */ }
 }
-setInterval(()=>{ if(TOUCHED.size) saveDelta(); }, 10000);
+// serialising a multi-megabyte delta is main-thread work: do it rarely,
+// and in idle time when the browser offers it
+setInterval(()=>{
+  if(!TOUCHED.size) return;
+  if(window.requestIdleCallback) requestIdleCallback(()=>saveDelta(), {timeout:5000});
+  else saveDelta();
+}, 30000);
 document.addEventListener('visibilitychange', ()=>{ if(document.hidden && TOUCHED.size) saveDelta(); });
 
 /* ---------- live engine ----------
@@ -804,7 +809,26 @@ function drawPending(){
   else b.style.display = 'none';
 }
 let structDirty = true;
-function render(){ structDirty = true; paint(); }
+/* the table is windowed: ~200 rows in the DOM, more appended as you scroll.
+   Fifteen hundred rows of cells and sparklines is what made the page lag —
+   filtering and sorting still run over the full set, only the DOM is capped. */
+let ROWCAP = 200;
+let moreObs = null;
+function attachMore(total){
+  const list = $('#list');
+  const old = document.getElementById('morerows'); if(old) old.remove();
+  if(moreObs){ moreObs.disconnect(); moreObs = null; }
+  if(total <= ROWCAP) return;
+  const d = document.createElement('div');
+  d.id = 'morerows'; d.className = 'empty';
+  d.textContent = '· · ·';
+  list.appendChild(d);
+  moreObs = new IntersectionObserver(es=>{
+    if(es.some(e=>e.isIntersecting)){ ROWCAP += 300; structDirty = true; paint(); }
+  }, {root:list, rootMargin:'600px'});
+  moreObs.observe(d);
+}
+function render(){ structDirty = true; ROWCAP = 200; paint(); }
 function paint(){
   const g = tab==='graph';
   $('#graphwrap').hidden = !g;
@@ -815,7 +839,8 @@ function paint(){
     return;
   }
   const r = rows();
-  $('#shown').textContent = r.length+' shown';
+  $('#shown').textContent = r.length > ROWCAP
+    ? `${ROWCAP} of ${r.length} — scroll for more` : r.length+' shown';
   if(!r.length && structDirty){
     $('#list').innerHTML = `<div class="empty">${tab==='watch'
       ? 'watchlist is empty. press w on a token'
@@ -825,9 +850,13 @@ function paint(){
     tbodyEl = null; rowMap.clear(); structDirty = false; lastOrder = [];
     return;
   }
+  const rv = r.slice(0, ROWCAP);
   if(structDirty || !tbodyEl){
-    buildTable(r); structDirty = false;
-    lastOrder = r.map(x=>x.addr); pending = 0; drawPending();
+    const st = $('#list').scrollTop;
+    buildTable(rv); structDirty = false;
+    $('#list').scrollTop = st;                 // growing the window keeps the place
+    attachMore(r.length);
+    lastOrder = rv.map(x=>x.addr); pending = 0; drawPending();
     return;
   }
   // live path: touch only changed rows, never rebuild
@@ -835,14 +864,14 @@ function paint(){
     const tr = rowMap.get(a); const x = T.get(a);
     if(tr && x && tab!=='cca') updateRow(tr, x, dir);
   }
-  const order = r.map(x=>x.addr);
+  const order = rv.map(x=>x.addr);
   const changed = order.length !== lastOrder.length || order.some((a,i)=>a!==lastOrder[i]);
   if(changed){
     const atTop = $('#list').scrollTop < 8;
     // hold sort order unless the user sits at the top, and even then at most
     // every few seconds so the table doesn't churn under the cursor
-    if(atTop && Date.now() - lastReorder > 4000) reorder(r);
-    else { orderStale = true; pending = r.filter(x=>!rowMap.has(x.addr)).length; drawPending(); }
+    if(atTop && Date.now() - lastReorder > 4000){ reorder(rv); attachMore(r.length); }
+    else { orderStale = true; pending = rv.filter(x=>!rowMap.has(x.addr)).length; drawPending(); }
   }
 }
 
@@ -1190,7 +1219,8 @@ function gStep(){
     n.x+=n.vx; n.y+=n.vy;
   }
   // hard de-overlap: whatever the forces say, bubbles never sit on top of
-  // each other
+  // each other (every other frame is plenty)
+  if(GRAPH.frame%2===0)
   for(let i=0;i<N.length;i++)for(let j=i+1;j<N.length;j++){
     const a=N[i],b=N[j];
     let dx=b.x-a.x, dy=b.y-a.y;
