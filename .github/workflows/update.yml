@@ -25,8 +25,8 @@ jobs:
       - name: Fetch launch data
         env:
           PYTHONUNBUFFERED: "1"
-          LB_BUDGET_S: "420"   # every stage is time-budgeted so the whole run
-                               # fits the job timeout with room to spare
+          LB_BUDGET_S: "300"   # every stage is time-budgeted; the whole run must
+                               # finish well inside the 30-minute dispatch cadence
         run: python3 scripts/fetch.py
       - name: Commit if changed
         run: |
@@ -35,6 +35,12 @@ jobs:
           git add data/
           git diff --staged --quiet && exit 0
           git commit -m "data: $(date -u +%H:%MZ)"
-          # main may have moved while the harvest ran; data commits rebase clean
-          git pull --rebase origin main
-          git push
+          # main may have moved while the harvest ran. On a data-vs-data
+          # conflict our files win: each run writes complete fresh snapshots
+          # (-X theirs = the commit being replayed, i.e. ours).
+          for i in 1 2 3; do
+            git pull --rebase -X theirs origin main || git rebase --abort
+            git push && exit 0
+            sleep 10
+          done
+          exit 1

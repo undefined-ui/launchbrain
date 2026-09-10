@@ -19,4 +19,4 @@ enabled = true
 # dispatches the update-data workflow (needs the GITHUB_TOKEN secret; the
 # scheduled handler is a no-op without it).
 [triggers]
-crons = ["*/20 * * * *"]
+crons = ["*/30 * * * *"]
