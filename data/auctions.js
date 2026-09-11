@@ -1,1 +1,1 @@
-window.LB_AUCTIONS={"meta": {"fetched_at": 1789106145, "chain_id": 4663, "source": "geckoterminal + pools.trade + blockscout + dexscreener", "tracked": 1500, "seen_this_run": 3425, "auctions": 0, "new_this_run": 3, "archived": 7902}, "auctions": []};
+window.LB_AUCTIONS={"meta": {"fetched_at": 1789107618, "chain_id": 4663, "source": "geckoterminal + pools.trade + blockscout + dexscreener", "tracked": 1500, "seen_this_run": 3358, "auctions": 0, "new_this_run": 4, "archived": 7920}, "auctions": []};
